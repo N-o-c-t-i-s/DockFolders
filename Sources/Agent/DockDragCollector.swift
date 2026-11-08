@@ -24,6 +24,8 @@ final class DockDragCollector {
     }
 
     private var dragged: DockItem?
+    /// When the dragged tile is a folder: its id (it can be dropped onto another folder to merge).
+    private var draggedFolderID: String?
     private var lastPoint: CGPoint = .zero
     /// Folder and app tiles where they are now (refreshed many times a second).
     private var currentTiles: [Tile] = []
@@ -44,6 +46,10 @@ final class DockDragCollector {
 
     func began(_ item: DockItem) {
         dragged = item
+        let path = item.url?.standardizedFileURL.resolvingSymlinksInPath().path
+        draggedFolderID = FolderStore.shared.folders.first {
+            FolderActions.dockURL(for: $0).standardizedFileURL.resolvingSymlinksInPath().path == path
+        }?.id
         openFolderID = nil
         armedApp = nil
         hover = nil
@@ -60,7 +66,9 @@ final class DockDragCollector {
             panel.setDropTargeted(panel.folderID == open && (panel.popupContains(cocoa(point)) || target(at: point) == .folder(open)))
             return
         }
-        let over = target(at: point)
+        var over = target(at: point)
+        // A folder goes into folders, not onto apps.
+        if draggedFolderID != nil, case .app? = over { over = nil }
         if let armed = armedApp, over == .app(armed) {
             if let frame = currentFrame(of: .app(armed)) { DockTag.shared.move(toTile: frame) }
             return
@@ -83,8 +91,13 @@ final class DockDragCollector {
                 panel.show(folderID: id, item: nil)
                 panel.heldForDrop = true
                 panel.setDropTargeted(true)
-                // Show where it will land (sliding to that page if the others are full).
-                panel.previewDrop(of: self.dragged?.url)
+                // Show where it will land (sliding to that page if the others are full): the app,
+                // or every app of a folder being dragged in.
+                if let source = self.draggedFolderID.flatMap(FolderStore.shared.folder(id:)) {
+                    panel.previewDrop(of: source.appURLs)
+                } else {
+                    panel.previewDrop(of: self.dragged?.url)
+                }
                 self.startSpringGuard()
             case .app(let url):
                 guard let frame = self.currentFrame(of: over) else { return }
@@ -99,7 +112,9 @@ final class DockDragCollector {
         let url = dragged?.url
         let open = openFolderID
         let armed = armedApp
+        let sourceFolder = draggedFolderID
         dragged = nil
+        draggedFolderID = nil
         openFolderID = nil
         armedApp = nil
         hover = nil
@@ -117,8 +132,13 @@ final class DockDragCollector {
                 panel.previewDrop(of: nil)   // let go elsewhere: the preview goes
                 return
             }
-            // The preview becomes the app, in the same spot; the folder stays a moment to show it.
-            FolderActions.dropFromDock(url, into: open, releasedOnDock: !inPopup)
+            // The preview becomes the app (or the folder's apps), in the same spot; the folder stays
+            // a moment to show it.
+            if let sourceFolder {
+                FolderActions.mergeFolder(sourceFolder, into: open)
+            } else {
+                FolderActions.dropFromDock(url, into: open, releasedOnDock: !inPopup)
+            }
             panel.showDropLanded()
         } else if let armed, target(at: point) == .app(armed) {
             FolderActions.combineInDock(dragged: url, onto: armed)

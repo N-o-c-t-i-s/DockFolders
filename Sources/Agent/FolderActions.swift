@@ -124,7 +124,7 @@ enum FolderActions {
         let tileURL = dockURL(for: folder)
         // The tile is going, so a name still waiting to reach it doesn't matter any more.
         let oldStub = pendingRenames.removeValue(forKey: folder.id)
-        FolderPanelController.shared.close()
+        FolderPanelController.shared.close(ifShowing: folder.id)
         DockPrefs.noteLiveRemoval(tileURL)
         DockSettle.forget(folder.id)
         NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
@@ -164,6 +164,16 @@ enum FolderActions {
             if DockLive.unpinApp(at: url) || attempts <= 1 { return }
             removeWhenSettled(url, attempts: attempts - 1)
         }
+    }
+
+    /// A folder dragged onto another: all its apps move in (after the others), and the dragged
+    /// folder, left empty, goes (its tile leaving the Dock).
+    static func mergeFolder(_ sourceID: String, into targetID: String) {
+        guard sourceID != targetID, let source = store.folder(id: sourceID), store.folder(id: targetID) != nil else { return }
+        // An app lives in one folder, so adding them here takes them out of the source, which is
+        // deleted once empty.
+        add(source.appURLs, to: targetID, removeFromDock: false)
+        if store.folder(id: sourceID) != nil { delete(sourceID) }   // e.g. its apps no longer exist
     }
 
     /// Takes apps' tiles out of the Dock (each with the Dock's poof, unless the app is running:
@@ -364,7 +374,7 @@ enum FolderActions {
     /// tile slides out of the Dock a moment later.
     static func delete(_ folderID: String) {
         guard let folder = store.folder(id: folderID) else { return }
-        FolderPanelController.shared.close()
+        FolderPanelController.shared.close(ifShowing: folderID)
         let inDock = DockPrefs.containsTile(for: dockURL(for: folder))
         store.delete(folderID)
         EventInterceptor.shared.update(folders: store.folders)

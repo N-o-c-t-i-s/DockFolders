@@ -159,7 +159,8 @@ final class EventInterceptor {
         case .leftMouseDragged:
             if let p = pending {
                 if hypot(location.x - p.start.x, location.y - p.start.y) > 5 {
-                    // It's a drag: hand the original press and this drag to the Dock.
+                    // It's a drag: hand the original press and this drag to the Dock, and watch it
+                    // like an app's (a folder can be dropped onto another folder to merge them).
                     pending = nil
                     p.event.setIntegerValueField(.eventSourceUserData, value: replayMarker)
                     p.event.post(tap: .cgSessionEventTap)
@@ -167,6 +168,9 @@ final class EventInterceptor {
                         drag.setIntegerValueField(.eventSourceUserData, value: replayMarker)
                         drag.post(tap: .cgSessionEventTap)
                     }
+                    appDrag = (p.item, p.start, true)
+                    let item = p.item
+                    main { self.onAppDragBegan?(item) }
                 }
                 return nil
             }

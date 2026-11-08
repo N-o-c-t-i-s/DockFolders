@@ -164,6 +164,11 @@ final class FolderPanelController: NSObject {
 
     // MARK: Closing
 
+    /// Closes the popup if it's showing this folder (e.g. one being deleted).
+    func close(ifShowing id: String) {
+        if folderID == id { close() }
+    }
+
     func close(animated: Bool = true) {
         guard isOpen else { return }
         heldForDrop = false
@@ -571,13 +576,18 @@ final class FolderPanelController: NSObject {
 
     /// While an app dragged from the Dock is over this folder: shows it faintly where it will land
     /// (after the folder's other apps) and slides to that page. `nil` takes the preview away.
-    func previewDrop(of url: URL?) {
+    func previewDrop(of url: URL?) { previewDrop(of: url.map { [$0] } ?? []) }
+
+    /// The same for several apps at once (a whole folder dragged onto this one).
+    func previewDrop(of urls: [URL]) {
         guard isOpen, let folderID, let folder = FolderStore.shared.folder(id: folderID) else { return }
         var apps = Self.apps(in: folder)
-        if let url, !folder.apps.contains(url.path), FileManager.default.fileExists(atPath: url.path) {
+        for url in urls where !folder.apps.contains(url.path) && FileManager.default.fileExists(atPath: url.path)
+            && !apps.contains(where: { $0.url.path == url.path }) {
             apps.append(FolderApp(url: url, name: Self.displayName(of: url),
                                   icon: NSWorkspace.shared.icon(forFile: url.path), isRunning: false, isPreview: true))
         }
+        let url = apps.first(where: \.isPreview)?.url
         let m = metrics(for: apps.count, folderName: folder.name)
         withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
             model.metrics = m
