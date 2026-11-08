@@ -86,6 +86,7 @@ enum DockMenus {
         return [
             .action("Edit Name…") { settings.show(folderID: folderID, editingName: true) },
             .action("Add Apps…") { settings.addApps(to: folderID) },
+            .action("Empty Folder") { FolderActions.emptyFolder(folderID) },
             .separator,
             .action("Settings…") { settings.show(folderID: folderID) },
         ]

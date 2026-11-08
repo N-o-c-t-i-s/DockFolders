@@ -425,8 +425,9 @@ enum DockSettle {
         if hasPending { apply() }
     }
 
-    /// Everything waiting, in one restart.
-    static func apply() {
+    /// Everything waiting, in one restart, plus an optional change of the caller's (so a change
+    /// that needs a restart anyway takes everything else waiting along with it).
+    static func apply(including change: ((inout [[String: Any]]) -> Void)? = nil, then completion: (() -> Void)? = nil) {
         let renames = FolderActions.takePendingRenames()
         let adds = appsToAdd
         appsToAdd = [:]
@@ -437,7 +438,9 @@ enum DockSettle {
             EventInterceptor.shared.update(folders: store.folders)
             changed()
             NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+            completion?()
         }) { tiles in
+            change?(&tiles)
             for (id, old) in renames {
                 guard let folder = store.folder(id: id), let index = DockPrefs.index(of: old, in: tiles) else { continue }
                 tiles[index] = DockPrefs.folderTile(folder)

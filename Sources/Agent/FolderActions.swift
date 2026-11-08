@@ -166,6 +166,35 @@ enum FolderActions {
         }
     }
 
+    /// Puts all of a folder's apps back in the Dock where the folder was, and deletes the folder.
+    /// Apps that aren't open can only get a Dock tile when the Dock restarts, so this does one
+    /// restart right away (taking anything else waiting for one along with it). Apps already
+    /// kept in the Dock stay where they are.
+    static func emptyFolder(_ folderID: String) {
+        guard let folder = store.folder(id: folderID) else { return }
+        FolderPanelController.shared.close(ifShowing: folderID)
+        let tileURL = dockURL(for: folder)
+        let apps = folder.appURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        StubManager.busy.insert(folder.id)
+        StubManager.stopIndicator(folder)
+        let oldStub = pendingRenames.removeValue(forKey: folderID)
+        store.delete(folderID)   // gone from Settings at once
+        DockSettle.forget(folderID)
+        EventInterceptor.shared.update(folders: store.folders)
+        DockSettle.apply(including: { tiles in
+            let appTiles = apps.filter { DockPrefs.index(of: $0, in: tiles) == nil }.map(DockPrefs.appTile(for:))
+            if let index = DockPrefs.index(of: tileURL, in: tiles) {
+                tiles.replaceSubrange(index...index, with: appTiles)
+            } else {
+                tiles.append(contentsOf: appTiles)
+            }
+        }, then: {
+            if let oldStub, oldStub.path != folder.stubURL.path { removeStub(at: oldStub) }
+            StubManager.remove(folder)
+            StubManager.busy.remove(folder.id)
+        })
+    }
+
     /// A folder dragged onto another: all its apps move in (after the others), and the dragged
     /// folder, left empty, goes (its tile leaving the Dock).
     static func mergeFolder(_ sourceID: String, into targetID: String) {

@@ -62,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 continue
             }
+            if url.host == "test-empty", let id = items.first(where: { $0.name == "id" })?.value {
+                FolderActions.emptyFolder(id)
+                continue
+            }
             if url.host == "test-merge", let from = items.first(where: { $0.name == "from" })?.value,
                let to = items.first(where: { $0.name == "to" })?.value {
                 FolderActions.mergeFolder(from, into: to)

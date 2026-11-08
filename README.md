@@ -28,6 +28,7 @@ Settings or Activity Monitor.
 | Turn pages | Two-finger swipe, or click the dots |
 | Rearrange apps in a folder | Drag an icon; hold it near the left/right edge to change pages |
 | Rename a folder, add apps | Right-click the folder → **Edit Name…** (opens Settings with the name ready to type) or **Add Apps…** (opens Settings with the app picker) |
+| Put a folder's apps back in the Dock | Right-click the folder → **Empty Folder** (the apps take the folder's place and the folder goes; one Dock refresh, since closed apps can only be added to the Dock that way) |
 | Remove/reorder apps, show/hide a folder in the Dock, delete it, options | Right-click the folder → **Settings…** (or open Dock Folders from Spotlight) |
 | Take an app out | Right-click it in the folder → Options → **Remove from Folder** or **Move to Dock** |
 | Apps per page (3, 6, 9 or 16), names or running dots under apps, icon size, magnification | Settings → ⚙︎ General → **Inside Folders** |
