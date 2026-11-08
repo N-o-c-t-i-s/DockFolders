@@ -181,9 +181,29 @@ final class DockAX {
         AXUIElementSetAttributeValue(list, "AXFocused" as CFString, kCFBooleanFalse)
     }
 
+    /// Dock menus that macOS draws in the Dock's helper process (DockHelper) rather than the Dock
+    /// itself, as it sometimes does. They aren't attached to the tile there, so look for them.
+    func helperMenus() -> [AXUIElement] {
+        guard let helper = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock.helper").first else { return [] }
+        let app = AXUIElementCreateApplication(helper.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        let windows: [AXUIElement] = AX.value(app, kAXWindowsAttribute) ?? []
+        return windows.flatMap { window -> [AXUIElement] in
+            let children: [AXUIElement] = AX.value(window, kAXChildrenAttribute) ?? []
+            return children.filter { (AX.value($0, kAXRoleAttribute) as String?) == kAXMenuRole }
+        }
+    }
+
     /// Closes a Dock menu that's open on another tile (opening a folder should dismiss it,
     /// as clicking any other Dock icon would).
     func dismissMenus() {
+        let helper = helperMenus()
+        if !helper.isEmpty {
+            helper.forEach { AXUIElementPerformAction($0, kAXCancelAction as CFString) }
+            if !helperMenus().isEmpty, let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock.helper").first?.processIdentifier {
+                for down in [true, false] { CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: down)?.postToPid(pid) }
+            }
+        }
         for item in items {
             guard let menu: AXUIElement = AX.value(item.element, "AXShownMenuUIElement") else { continue }
             if AXUIElementPerformAction(menu, kAXCancelAction as CFString) != .success {

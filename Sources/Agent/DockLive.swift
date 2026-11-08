@@ -28,14 +28,22 @@ enum DockLive {
     private static func title(_ element: AXUIElement) -> String? { AX.value(element, kAXTitleAttribute) }
 
     /// Opens a tile's Dock menu and finds its Options submenu. Closes the menu again if there's none.
-    private static func openOptions(_ tile: DockItem) -> (menu: AXUIElement, options: [AXUIElement])? {
-        // A menu from an earlier try that opened late would be in the way (and stay open).
+    private static func openOptions(_ staleTile: DockItem) -> (menu: AXUIElement, options: [AXUIElement])? {
+        // A menu from an earlier try (or one still closing) would be in the way, or be mistaken for
+        // this tile's: close it and wait until it has gone.
         DockAX.shared.dismissMenus()
+        for _ in 0..<60 where !DockAX.shared.helperMenus().isEmpty { usleep(5_000) }
+        let earlier = DockAX.shared.helperMenus()
+        // The Dock rebuilds its tiles when one moves (e.g. an open app stops being kept), so look
+        // the tile up again right now rather than trusting an older reference.
+        let tile = staleTile.url.flatMap(DockAX.shared.item(for:)) ?? staleTile
         let shown = AXUIElementPerformAction(tile.element, kAXShowMenuAction as CFString)
         guard shown == .success else { log.error("AXShowMenu failed: \(shown.rawValue) on \(tile.title, privacy: .public)"); return nil }
         var menu: AXUIElement?
         for _ in 0..<160 {   // up to 0.8 s: right after a drop the Dock can be slow to show it
-            menu = children(tile.element).first { role($0) == kAXMenuRole }
+            menu = children(tile.element).first { role($0) == kAXMenuRole } ?? shownMenu(on: tile.url)
+                // macOS sometimes draws Dock menus in the Dock's helper process instead: a new one there is this one.
+                ?? DockAX.shared.helperMenus().first { new in !earlier.contains { CFEqual($0, new) } }
             if menu != nil { break }
             usleep(5_000)
         }
@@ -53,6 +61,13 @@ enum DockLive {
         log.error("no \(optionsTitle, privacy: .public) submenu on \(tile.title, privacy: .public); items: \(titles, privacy: .public)")
         close(menu)
         return nil
+    }
+
+    /// The menu the Dock is showing on the tile for `url`, found through the Dock's current tiles.
+    private static func shownMenu(on url: URL?) -> AXUIElement? {
+        guard let url, let item = DockAX.shared.item(for: url) else { return nil }
+        if let menu: AXUIElement = AX.value(item.element, "AXShownMenuUIElement") { return menu }
+        return children(item.element).first { role($0) == kAXMenuRole }
     }
 
     private static func close(_ menu: AXUIElement) {
@@ -83,11 +98,14 @@ enum DockLive {
     static func unpinApp(at url: URL) -> Bool {
         guard let tile = DockAX.shared.item(for: url), let opened = openOptions(tile) else { return false }
         let (menu, options) = opened
-        if let remove = options.first(where: { title($0) == removeTitle }) { return press(remove) }
-        if let keep = options.first(where: { title($0) == keepTitle }) {
+        // Make sure it's this tile's menu: an open app's has Keep in Dock, a closed one's Remove.
+        let running = (AX.value(tile.element, "AXIsApplicationRunning") as Bool?) == true
+        if !running, let remove = options.first(where: { title($0) == removeTitle }) { return press(remove) }
+        if running, let keep = options.first(where: { title($0) == keepTitle }) {
             if !isChecked(keep) { close(menu); return true }
             return press(keep)
         }
+        log.error("menu didn't match \(tile.title, privacy: .public) (running: \(running))")
         close(menu)
         return false
     }
@@ -336,7 +354,18 @@ enum DockSettle {
         set { defaults.set(newValue, forKey: "pendingDockApps") }
     }
 
-    static var hasPending: Bool { FolderActions.hasPendingRenames || !appsToAdd.isEmpty }
+    /// The Dock needs a restart for its own sake (e.g. to load updated folder tile code).
+    private static var restartWanted: Bool {
+        get { defaults.bool(forKey: "pendingDockRestart") }
+        set { defaults.set(newValue, forKey: "pendingDockRestart") }
+    }
+
+    static var hasPending: Bool { FolderActions.hasPendingRenames || !appsToAdd.isEmpty || restartWanted }
+
+    static func restartLater() {
+        restartWanted = true
+        changed()
+    }
 
     static func addApp(_ url: URL, near folderID: String) {
         appsToAdd[url.path] = folderID
@@ -375,6 +404,7 @@ enum DockSettle {
         let renames = FolderActions.takePendingRenames()
         let adds = appsToAdd
         appsToAdd = [:]
+        restartWanted = false
         let store = FolderStore.shared
         DockPrefs.modify(then: {
             FolderActions.finishRenames(renames)

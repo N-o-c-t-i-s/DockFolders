@@ -56,14 +56,20 @@ enum FolderActions {
         }
     }
 
-    /// Takes apps' tiles out of the Dock all at once (each one's menu pressed right after the
-    /// last), retrying a few times while the Dock finishes a drop. Never restarts it.
+    /// Takes apps' tiles out of the Dock together, retrying a few times while the Dock finishes a
+    /// drop. Apps that aren't open go first: they just poof. Open ones only stop being kept, which
+    /// makes the Dock move them along and rebuild its tiles, so they come after. Never restarts it.
     private static func takeOutOfDockTogether(_ urls: [URL], completion: @escaping () -> Void) {
         urls.forEach(DockPrefs.noteLiveRemoval)
-        var remaining = urls
+        let open = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+        var remaining = urls.sorted { !open.contains($0.standardizedFileURL.path) && open.contains($1.standardizedFileURL.path) }
         func pass(_ attemptsLeft: Int) {
+            var first = true
             remaining = remaining.filter { url in
                 guard DockAX.shared.item(for: url) != nil else { return false }   // already gone
+                // A moment between them for the Dock to finish with the last menu.
+                if !first { usleep(200_000) }
+                first = false
                 return !DockLive.unpinApp(at: url)
             }
             guard !remaining.isEmpty, attemptsLeft > 1 else {

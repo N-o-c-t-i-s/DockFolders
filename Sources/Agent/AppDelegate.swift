@@ -49,6 +49,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls where url.scheme == DFShared.urlScheme {
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             // dockfolders://create?path=/Applications/A.app&path=… (handy for scripting)
+            #if DFTEST
+            // Test builds only (DF_SWIFT_FLAGS="-D DFTEST"): runs Create Folder on two Dock apps.
+            if url.host == "test-combine" {
+                let paths = items.filter { $0.name == "path" }.compactMap(\.value)
+                if paths.count == 2 {
+                    FolderActions.combineInDock(dragged: URL(fileURLWithPath: paths[0]), onto: URL(fileURLWithPath: paths[1]))
+                }
+                continue
+            }
+            #endif
             if url.host == "create" {
                 let paths = items.filter { $0.name == "path" }.compactMap(\.value)
                 FolderActions.createFolder(apps: paths.map { URL(fileURLWithPath: $0) })
@@ -130,8 +140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 StubManager.refreshTile(folder)
             }
         }
-        // The Dock keeps old plug-in code loaded until it restarts.
-        if rebuilt { DockPrefs.restartDock() }
+        // The Dock keeps old plug-in code loaded until it restarts: do that at a quiet moment.
+        if rebuilt { DockSettle.restartLater() }
         FolderActions.removeEmptyFoldersFromDock()
         FolderActions.recoverPendingRenames()
     }

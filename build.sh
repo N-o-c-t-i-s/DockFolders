@@ -9,7 +9,7 @@ BUILD="$PWD/build"
 APP="$BUILD/Dock Folders.app"
 STUB="$APP/Contents/Resources/FolderStub.app"
 PLUGIN="$STUB/Contents/PlugIns/FolderTile.docktileplugin"
-SWIFTC=(xcrun swiftc -target arm64-apple-macos26.0 -O -swift-version 5)
+SWIFTC=(xcrun swiftc -target arm64-apple-macos26.0 -O -swift-version 5 ${DF_SWIFT_FLAGS:-})
 
 # A stable signing identity keeps the Accessibility permission across rebuilds.
 IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')}"
@@ -19,9 +19,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" \
          "$STUB/Contents/MacOS" "$STUB/Contents/Resources" "$PLUGIN/Contents/MacOS"
 
-# Changes to the stub or plug-in make the agent rebuild existing folder stubs on next launch.
-TEMPLATE_HASH=$(cat Sources/Shared/*.swift Sources/Stub/*.swift Sources/TilePlugin/*.swift \
-                    Resources/Stub-Info.plist Resources/TilePlugin-Info.plist build.sh | shasum -a 256 | cut -c1-16)
+# Changes to the stub or plug-in make the agent rebuild existing folder stubs on next launch
+# (which restarts the Dock, so only real changes should). Bump STUB_BUILD when the way they're
+# built changes; other edits to this script don't count.
+STUB_BUILD=1
+TEMPLATE_HASH=$( (cat Sources/Shared/*.swift Sources/Stub/*.swift Sources/TilePlugin/*.swift \
+                    Resources/Stub-Info.plist Resources/TilePlugin-Info.plist; echo "$STUB_BUILD") | shasum -a 256 | cut -c1-16)
 
 echo "→ Dock tile plug-in"
 # The Dock only loads Mach-O bundles (MH_BUNDLE), not dylibs.
