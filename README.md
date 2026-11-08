@@ -26,6 +26,10 @@
   <a href="https://github.com/myles-dean/DockFolders/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/myles-dean/DockFolders?label=release"></a>
 </p>
 
+<p align="center">
+  <img src="docs/demo.gif" width="872" alt="Dock Folders demo: the pointer moves to the Dock, hovers the Utilities folder and clicks it, and a Liquid Glass popup opens above it showing eight apps">
+</p>
+
 ---
 
 **Dock Folders** adds folders to the Mac Dock, the way folders work on an iPhone or iPad. Drag one
