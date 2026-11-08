@@ -89,10 +89,7 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   quick pass over a folder doesn't count, so rearranging the Dock works as usual.
 - **Making a folder by dragging.** Holding a dragged app over another app shows a **Create
   Folder** tag above it, drawn like the Dock's own name tags. Let go and both apps' tiles leave the
-  Dock together, then the folder comes in where they were: its little app runs, so the Dock adds it
-  like any app that opens, and it's slid under the pointer with a drag sent only to the Dock (the
-  Dock drops dragged tiles under the real pointer, so this needs the pointer still on the Dock).
-  Moving an open app's tile also keeps it in the Dock, so no menu is involved.
+  Dock together, then the new folder appears at the end of the Dock's apps.
 - **Folder names.** New folders are named after their apps' App Store categories
   (`LSApplicationCategoryType`), like iOS: two games make "Games"; related categories get a group
   name ("Creativity", "Productivity & Finance", "Utilities"…); otherwise the category of the app
