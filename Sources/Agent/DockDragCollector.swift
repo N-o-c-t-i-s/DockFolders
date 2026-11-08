@@ -40,7 +40,11 @@ final class DockDragCollector {
     private var springGuard: Timer?
     private var springNudge: CGFloat = 1
 
-    private static let holdDelay: TimeInterval = 0.18
+    /// How long to hold before a folder springs open (quick: it only opens the folder)…
+    private static let folderHoldDelay: TimeInterval = 0.18
+    /// …and before Create Folder appears over an app (longer, so passing over one on the way
+    /// somewhere never makes a folder).
+    private static let createFolderHoldDelay: TimeInterval = 0.5
 
     // MARK: Drag (from the event tap, on the main thread)
 
@@ -78,9 +82,14 @@ final class DockDragCollector {
         hoverToken += 1
         if armedApp != nil { armedApp = nil; DockTag.shared.hide() }
         guard let over else { return }
+        // The Dock spring-loads a tile something rests on for half a second; keep that from
+        // happening while we wait (and after).
+        startSpringGuard()
         // Held there (even without moving): act on it.
         let token = hoverToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdDelay) { [weak self] in
+        let delay: TimeInterval
+        if case .app = over { delay = Self.createFolderHoldDelay } else { delay = Self.folderHoldDelay }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.dragged != nil, self.hoverToken == token else { return }
             // Still over that tile where it is now (not a gap it slid away from)?
             self.refreshTiles(force: true)
@@ -98,7 +107,6 @@ final class DockDragCollector {
                 } else {
                     panel.previewDrop(of: self.dragged?.url)
                 }
-                self.startSpringGuard()
             case .app(let url):
                 guard let frame = self.currentFrame(of: over) else { return }
                 self.armedApp = url
@@ -149,14 +157,16 @@ final class DockDragCollector {
 
     /// Holding a dragged item on an app's Dock tile for half a second makes the Dock spring-load
     /// it (showing that app's windows to drop into). Other apps can't switch that off for the
-    /// Dock alone, so while the drag rests on the open folder's tile, nudge the Dock's idea of the
+    /// Dock alone, so while the drag rests on a folder's or app's tile, nudge the Dock's idea of the
     /// pointer by a point every 0.2 s (sent only to the Dock; the real pointer doesn't move, and
     /// the Dock drops under the real pointer), so it never counts as resting.
     private func startSpringGuard() {
         springGuard?.invalidate()
         springGuard = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self, self.dragged != nil, let open = self.openFolderID,
-                  self.target(at: self.lastPoint) == .folder(open),
+            // Only while resting on the tile being held over (a sprung folder, or an app).
+            guard let self, self.dragged != nil,
+                  let resting = self.openFolderID.map({ Target.folder($0) }) ?? self.hover,
+                  self.target(at: self.lastPoint) == resting,
                   let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return }
             self.springNudge = -self.springNudge
             let p = CGPoint(x: self.lastPoint.x + self.springNudge, y: self.lastPoint.y)
