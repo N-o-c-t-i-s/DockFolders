@@ -89,7 +89,8 @@ enum DockMenus {
     static func appEntries(appURL: URL) -> [MenuEntry] {
         let name = FolderPanelController.displayName(of: appURL)
         var entries: [MenuEntry] = [.action("New Folder with “\(name)”") { FolderActions.newFolder(with: appURL) }]
-        let folders = FolderStore.shared.folders
+        // Not the folder it's already in (an app lives in one folder at a time).
+        let folders = FolderStore.shared.folders.filter { !$0.apps.contains(appURL.path) }
         if !folders.isEmpty {
             entries.append(.submenu("Move “\(name)” to Folder", folders.map { folder in
                 .action(folder.name) { FolderActions.add([appURL], to: folder.id, removeFromDock: true) }

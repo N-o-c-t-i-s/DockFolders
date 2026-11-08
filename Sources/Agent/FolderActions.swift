@@ -15,6 +15,7 @@ enum FolderActions {
     /// the app's tile leaves it.
     static func newFolder(with appURL: URL) {
         let folder = store.create(name: FolderNaming.name(for: [appURL]), apps: [appURL])
+        takeFromOtherFolders([appURL], except: folder.id)
         do {
             try StubManager.install(folder)
         } catch {
@@ -40,6 +41,7 @@ enum FolderActions {
             Prompt.error("Couldn’t create the folder.", error)
             return
         }
+        takeFromOtherFolders(apps, except: folder.id)
         EventInterceptor.shared.update(folders: store.folders)
         FolderPanelController.shared.close()
         // Never by restarting the Dock: if something can't be done live, it's left as it is.
@@ -95,6 +97,7 @@ enum FolderActions {
             Prompt.error("Couldn’t create the folder.", error)
             return
         }
+        takeFromOtherFolders(apps, except: folder.id)
         EventInterceptor.shared.update(folders: store.folders)
         if !folder.apps.isEmpty { showInDock(folder) }
     }
@@ -189,10 +192,22 @@ enum FolderActions {
 
     // MARK: Adding / removing apps
 
+    /// An app lives in one folder at a time: putting it in a folder moves it there, out of any
+    /// other. A folder left empty by that goes, as when you take out its last app yourself.
+    private static func takeFromOtherFolders(_ urls: [URL], except folderID: String?) {
+        let paths = Set(urls.map(\.path))
+        for other in store.folders where other.id != folderID && other.apps.contains(where: paths.contains) {
+            guard let updated = store.update(other.id, { $0.apps.removeAll(where: paths.contains) }) else { continue }
+            StubManager.refreshTile(updated)
+            if updated.apps.isEmpty { delete(other.id) }
+        }
+    }
+
     static func add(_ appURLs: [URL], to folderID: String, removeFromDock: Bool) {
         let apps = appURLs.filter { $0.pathExtension == "app" }
         guard !apps.isEmpty, let before = store.folder(id: folderID),
               let folder = store.update(folderID, { $0.apps += apps.map(\.path) }) else { return }
+        takeFromOtherFolders(apps, except: folderID)
         StubManager.refreshTile(folder)
         FolderPanelController.shared.reload()
 
