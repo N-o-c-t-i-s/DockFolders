@@ -45,19 +45,19 @@ enum FolderActions {
         // Never by restarting the Dock: if something can't be done live, it's left as it is.
         takeOutOfDockTogether([dragged, target]) {
             DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
-            DockLive.placeFolderAtPointer(folder) { placed in
-                if !placed, DockAX.shared.item(for: folder.stubURL) == nil {
-                    // The pointer had left the Dock before it could slide in: at the end instead.
-                    showInDock(folder, restartIfNeeded: false)
+            DockLive.placeFolderAtPointer(folder) { _ in
+                // Make sure it really is in the Dock now; if not, put it in (at the end).
+                DockLive.verifyKept(folder, url: folder.stubURL) { kept in
+                    if !kept { showInDock(folder) }
+                    EventInterceptor.shared.update(folders: store.folders)
+                    NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
                 }
-                EventInterceptor.shared.update(folders: store.folders)
-                NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
             }
         }
     }
 
     /// Takes apps' tiles out of the Dock all at once (each one's menu pressed right after the
-    /// last), retrying for up to two seconds while the Dock finishes a drop. Never restarts it.
+    /// last), retrying a few times while the Dock finishes a drop. Never restarts it.
     private static func takeOutOfDockTogether(_ urls: [URL], completion: @escaping () -> Void) {
         urls.forEach(DockPrefs.noteLiveRemoval)
         var remaining = urls
@@ -72,9 +72,10 @@ enum FolderActions {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { completion() }
                 return
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { pass(attemptsLeft - 1) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { pass(attemptsLeft - 1) }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { pass(20) }
+        // A moment for the Dock to finish setting a dropped tile down.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { pass(5) }
     }
 
     /// Creates a folder and adds its tile to the end of the Dock's apps.
@@ -106,20 +107,23 @@ enum FolderActions {
 
     // MARK: The Dock, live
 
-    /// Puts a folder's tile in the Dock with no restart and no sound (see DockLive). If the Dock
-    /// doesn't play along, falls back to a restart (unless `restartIfNeeded` is false).
-    private static func showInDock(_ folder: Folder, restartIfNeeded: Bool = true,
-                                   completion: @escaping (Bool) -> Void = { _ in }) {
+    /// Puts a folder's tile in the Dock with no restart and no sound (see DockLive), checking the
+    /// Dock really kept it and trying once more if not. Never restarts the Dock: if it still won't,
+    /// the folder stays out of it (Settings shows Show in Dock off).
+    private static func showInDock(_ folder: Folder, attempts: Int = 2, completion: @escaping (Bool) -> Void = { _ in }) {
         if !FileManager.default.fileExists(atPath: folder.stubURL.path) { try? StubManager.install(folder) }
         DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
         NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
-        DockLive.pinFolder(folder) { ok in
-            if !ok {
-                if restartIfNeeded { DockPrefs.modify { _ in } } else { DockPrefs.forgetLive(folder.stubURL) }
+        DockLive.pinFolder(folder) { kept in
+            if !kept, attempts > 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showInDock(folder, attempts: attempts - 1, completion: completion) }
+                return
             }
+            if !kept { DockPrefs.forgetLive(folder.stubURL) }
+            StubManager.syncIndicator(folder, running: StubManager.hasRunningApp(folder))
             EventInterceptor.shared.update(folders: store.folders)
             NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
-            completion(ok)
+            completion(kept)
         }
     }
 

@@ -7,7 +7,9 @@ import AppKit
 ///  • Hold it over another app and a "Create Folder" tag appears above that app, like the Dock's
 ///    own name tags; let go and the two become a folder, in their place.
 ///
-/// A quick pass over a tile doesn't count, so rearranging the Dock works as usual.
+/// Targets are where tiles are right now (the Dock slides them aside as you drag, opening a gap
+/// under the pointer; a gap is never a target). A quick pass over a tile doesn't count either, so
+/// rearranging the Dock works as usual.
 final class DockDragCollector {
     static let shared = DockDragCollector()
 
@@ -23,10 +25,7 @@ final class DockDragCollector {
 
     private var dragged: DockItem?
     private var lastPoint: CGPoint = .zero
-    /// Tiles where they were when the drag started: the Dock slides tiles aside as you drag, so
-    /// this is where you aim.
-    private var restingTiles: [Tile] = []
-    /// The same tiles where they are now (refreshed a few times a second).
+    /// Folder and app tiles where they are now (refreshed many times a second).
     private var currentTiles: [Tile] = []
     private var lastRefresh = Date.distantPast
     private var hover: Target?
@@ -45,18 +44,14 @@ final class DockDragCollector {
         openFolderID = nil
         armedApp = nil
         hover = nil
-        restingTiles = tiles(excluding: item.url)
-        currentTiles = restingTiles
+        currentTiles = tiles(excluding: item.url)
         lastRefresh = Date()
     }
 
     func moved(to point: CGPoint) {
         guard let dragged else { return }
         lastPoint = point
-        if Date().timeIntervalSince(lastRefresh) > 0.1 {
-            currentTiles = tiles(excluding: dragged.url)
-            lastRefresh = Date()
-        }
+        refreshTiles()
         let panel = FolderPanelController.shared
         if let open = openFolderID {
             panel.setDropTargeted(panel.folderID == open && (panel.popupContains(cocoa(point)) || target(at: point) == .folder(open)))
@@ -75,7 +70,10 @@ final class DockDragCollector {
         // Held there (even without moving): act on it.
         let token = hoverToken
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdDelay) { [weak self] in
-            guard let self, self.dragged != nil, self.hoverToken == token, self.target(at: self.lastPoint) == over else { return }
+            guard let self, self.dragged != nil, self.hoverToken == token else { return }
+            // Still over that tile where it is now (not a gap it slid away from)?
+            self.refreshTiles(force: true)
+            guard self.target(at: self.lastPoint) == over else { return }
             switch over {
             case .folder(let id):
                 self.openFolderID = id
@@ -116,16 +114,19 @@ final class DockDragCollector {
 
     // MARK: Where the tiles are
 
+    private func refreshTiles(force: Bool = false) {
+        guard let dragged, force || Date().timeIntervalSince(lastRefresh) > 0.05 else { return }
+        currentTiles = tiles(excluding: dragged.url)
+        lastRefresh = Date()
+    }
+
     private func target(at point: CGPoint) -> Target? {
-        // The middle of a tile (not its edges, which are where you'd aim to drop beside it).
-        func hit(_ tiles: [Tile]) -> Target? {
-            tiles.first { $0.frame.insetBy(dx: $0.frame.width * 0.18, dy: -8).contains(point) }?.target
-        }
-        return hit(restingTiles) ?? hit(currentTiles)
+        // The middle of a tile where it is now (not its edges, where you'd aim to drop beside it).
+        currentTiles.first { $0.frame.insetBy(dx: $0.frame.width * 0.2, dy: -8).contains(point) }?.target
     }
 
     private func currentFrame(of target: Target) -> CGRect? {
-        currentTiles.first { $0.target == target }?.frame ?? restingTiles.first { $0.target == target }?.frame
+        currentTiles.first { $0.target == target }?.frame
     }
 
     /// Folders and ordinary apps in the Dock (not Finder, the Apps launcher, or the dragged app).

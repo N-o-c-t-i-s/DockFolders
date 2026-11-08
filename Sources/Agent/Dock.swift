@@ -288,37 +288,45 @@ enum DockPrefs {
 
     // Changes made live, through the Dock's menus, that it hasn't saved yet (it writes its
     // settings a few seconds later). Until it does, they count as done.
-    private static var livePinned: [String: [String: Any]] = [:]
-    private static var liveRemoved: Set<String> = []
+    // If the Dock hasn't confirmed one after a while, it didn't happen: trust the Dock again.
+    private static var livePinned: [String: (tile: [String: Any], since: Date)] = [:]
+    private static var liveRemoved: [String: Date] = [:]
+    private static let liveTimeout: TimeInterval = 12
 
     static func noteLivePin(_ url: URL, tile: [String: Any]) {
         let target = normalized(url)
-        liveRemoved.remove(target)
-        livePinned[target] = tile
+        liveRemoved.removeValue(forKey: target)
+        livePinned[target] = (tile, Date())
     }
 
     static func noteLiveRemoval(_ url: URL) {
         let target = normalized(url)
         livePinned.removeValue(forKey: target)
-        liveRemoved.insert(target)
+        liveRemoved[target] = Date()
     }
 
     /// Drops a live change that didn't happen after all.
     static func forgetLive(_ url: URL) {
         let target = normalized(url)
         livePinned.removeValue(forKey: target)
-        liveRemoved.remove(target)
+        liveRemoved.removeValue(forKey: target)
     }
 
     static func containsTile(for url: URL) -> Bool {
         let target = normalized(url)
         let saved = readApps().contains { path(of: $0) == target }
-        if livePinned[target] != nil {
-            if saved { livePinned.removeValue(forKey: target) }
+        if let pin = livePinned[target] {
+            if saved || Date().timeIntervalSince(pin.since) > liveTimeout {
+                livePinned.removeValue(forKey: target)
+                return saved
+            }
             return true
         }
-        if liveRemoved.contains(target) {
-            if !saved { liveRemoved.remove(target) }
+        if let since = liveRemoved[target] {
+            if !saved || Date().timeIntervalSince(since) > liveTimeout {
+                liveRemoved.removeValue(forKey: target)
+                return saved
+            }
             return false
         }
         return saved
@@ -340,9 +348,14 @@ enum DockPrefs {
     /// Brings saved settings up to date with live changes the Dock hasn't written yet, so a
     /// restart doesn't undo them.
     private static func reconcileLive(_ apps: inout [[String: Any]]) {
-        apps.removeAll { tile in path(of: tile).map(liveRemoved.contains) ?? false }
-        for (target, tile) in livePinned where !apps.contains(where: { path(of: $0) == target }) {
-            apps.append(tile)
+        let now = Date()
+        apps.removeAll { tile in
+            guard let p = path(of: tile), let since = liveRemoved[p] else { return false }
+            return now.timeIntervalSince(since) <= liveTimeout
+        }
+        for (target, pin) in livePinned where now.timeIntervalSince(pin.since) <= liveTimeout
+            && !apps.contains(where: { path(of: $0) == target }) {
+            apps.append(pin.tile)
         }
     }
 

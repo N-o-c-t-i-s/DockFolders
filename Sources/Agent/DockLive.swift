@@ -29,15 +29,21 @@ enum DockLive {
 
     /// Opens a tile's Dock menu and finds its Options submenu. Closes the menu again if there's none.
     private static func openOptions(_ tile: DockItem) -> (menu: AXUIElement, options: [AXUIElement])? {
+        // A menu from an earlier try that opened late would be in the way (and stay open).
+        DockAX.shared.dismissMenus()
         let shown = AXUIElementPerformAction(tile.element, kAXShowMenuAction as CFString)
         guard shown == .success else { log.error("AXShowMenu failed: \(shown.rawValue) on \(tile.title, privacy: .public)"); return nil }
         var menu: AXUIElement?
-        for _ in 0..<60 {
+        for _ in 0..<160 {   // up to 0.8 s: right after a drop the Dock can be slow to show it
             menu = children(tile.element).first { role($0) == kAXMenuRole }
             if menu != nil { break }
             usleep(5_000)
         }
-        guard let menu else { log.error("no menu appeared on \(tile.title, privacy: .public)"); return nil }
+        guard let menu else {
+            log.error("no menu appeared on \(tile.title, privacy: .public)")
+            DockAX.shared.dismissMenus()   // so it can't turn up later and linger
+            return nil
+        }
         let titles = children(menu).compactMap(title)
         log.debug("menu on \(tile.title, privacy: .public): \(titles, privacy: .public)")
         if let item = children(menu).first(where: { title($0) == optionsTitle }),
@@ -161,9 +167,29 @@ enum DockLive {
     /// Puts a folder's tile in the Dock: its stub runs, so the Dock shows it like any open app,
     /// and "Keep in Dock" keeps it. Lands at the end of the Dock's apps.
     static func pinFolder(_ folder: Folder, completion: @escaping (Bool) -> Void) {
-        withStub(at: folder.stubURL, folder: folder, quitAfter: false, completion: completion) { tile in
+        withStub(at: folder.stubURL, folder: folder, quitAfter: false, completion: { pressed in
+            guard pressed else { completion(false); return }
+            verifyKept(folder, url: folder.stubURL, completion: completion)
+        }) { tile in
             setKept(true, tile: tile)
         }
+    }
+
+    /// Whether a folder's tile really is kept in the Dock (a pressed menu item isn't proof). With
+    /// its stub gone, a kept tile stays and an unkept one goes with it; while the stub still runs
+    /// (as the folder's running indicator), wait for the Dock to save it.
+    static func verifyKept(_ folder: Folder, url: URL, completion: @escaping (Bool) -> Void) {
+        let deadline = Date().addingTimeInterval(8)
+        func check() {
+            if DockPrefs.savedContains(url) { completion(true); return }
+            if stubs(at: url, folder).isEmpty {
+                completion(DockAX.shared.item(for: url) != nil)
+                return
+            }
+            guard Date() < deadline else { completion(false); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { check() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { check() }
     }
 
     /// Takes a folder's tile out of the Dock without the poof: its stub runs, stops being kept,
@@ -223,7 +249,7 @@ enum DockLive {
         }
     }
 
-    private static func stubs(at url: URL, _ folder: Folder) -> [NSRunningApplication] {
+    static func stubs(at url: URL, _ folder: Folder) -> [NSRunningApplication] {
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
         return NSRunningApplication.runningApplications(withBundleIdentifier: folder.bundleIdentifier).filter {
             $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath().path == path
@@ -248,8 +274,9 @@ enum DockLive {
 
     /// Puts a folder's tile in the Dock right under the pointer (which must be on the Dock): its
     /// stub runs, so the Dock adds it like any app that opens, and it's slid under the pointer at
-    /// once. Moving an open app's tile also keeps it in the Dock, so no menu is needed.
-    /// `completion(false)` (with nothing changed) if the pointer isn't on the Dock.
+    /// once. Moving an open app's tile keeps it in the Dock; if the Dock doesn't save it as kept
+    /// soon after, "Keep in Dock" makes sure. `completion(placed)`; whether it ended up in the
+    /// Dock at all is checked separately (`verifyKept`).
     static func placeFolderAtPointer(_ folder: Folder, completion: @escaping (Bool) -> Void) {
         let url = folder.stubURL
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
@@ -259,10 +286,10 @@ enum DockLive {
             return
         }
         StubManager.busy.insert(folder.id)
-        func finish(_ ok: Bool) {
+        func finish(_ placed: Bool) {
             StubManager.busy.remove(folder.id)
             StubManager.syncIndicator(folder, running: StubManager.hasRunningApp(folder))
-            completion(ok)
+            completion(placed)
         }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
@@ -274,29 +301,22 @@ enum DockLive {
                 waitForRunningTile(url: url, app: app, deadline: Date().addingTimeInterval(5), settle: 0.05) { tile in
                     guard tile != nil else { finish(false); return }
                     moveTileToPointer(url) { moved in
-                        if moved {
-                            confirmKept(url, deadline: Date().addingTimeInterval(6)) { finish(true) }
-                        } else {
-                            // The pointer left the Dock: keep it where it landed instead.
-                            if let tile = DockAX.shared.item(for: url) { setKept(true, tile: tile) }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { finish(false) }
-                        }
+                        ensureKept(url, deadline: Date().addingTimeInterval(moved ? 3 : 0)) { finish(moved) }
                     }
                 }
             }
         }
     }
 
-    /// Once the Dock has saved the moved tile as kept, done; if it hasn't after a few seconds,
-    /// keep it from its menu.
-    private static func confirmKept(_ url: URL, deadline: Date, then: @escaping () -> Void) {
+    /// Waits (briefly) for the Dock to save the tile as kept; otherwise keeps it from its menu.
+    private static func ensureKept(_ url: URL, deadline: Date, then: @escaping () -> Void) {
         if DockPrefs.savedContains(url) { then(); return }
         guard Date() < deadline else {
             if let tile = DockAX.shared.item(for: url) { setKept(true, tile: tile) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { then() }
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { confirmKept(url, deadline: deadline, then: then) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { ensureKept(url, deadline: deadline, then: then) }
     }
 }
 
