@@ -223,17 +223,72 @@ enum DockLive {
     }
 
     private static func waitForRunningTile(url: URL, app: NSRunningApplication, deadline: Date,
-                                           then: @escaping (DockItem?) -> Void) {
+                                           settle: TimeInterval = 0.25, then: @escaping (DockItem?) -> Void) {
         if app.isFinishedLaunching, let tile = DockAX.shared.item(for: url),
            (AX.value(tile.element, "AXIsApplicationRunning") as Bool?) == true {
             // A moment for the Dock to switch the tile to its running-app menu.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { then(DockAX.shared.item(for: url)) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { then(DockAX.shared.item(for: url)) }
             return
         }
         guard Date() < deadline, !app.isTerminated else { then(nil); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            waitForRunningTile(url: url, app: app, deadline: deadline, then: then)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            waitForRunningTile(url: url, app: app, deadline: deadline, settle: settle, then: then)
         }
+    }
+
+    // MARK: A new folder right where you are
+
+    /// Puts a folder's tile in the Dock right under the pointer (which must be on the Dock): its
+    /// stub runs, so the Dock adds it like any app that opens, and it's slid under the pointer at
+    /// once. Moving an open app's tile also keeps it in the Dock, so no menu is needed.
+    /// `completion(false)` (with nothing changed) if the pointer isn't on the Dock.
+    static func placeFolderAtPointer(_ folder: Folder, completion: @escaping (Bool) -> Void) {
+        let url = folder.stubURL
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        guard pointerOnDock() != nil, FileManager.default.fileExists(atPath: url.path) else { completion(false); return }
+        if StubManager.registering.contains(path) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { placeFolderAtPointer(folder, completion: completion) }
+            return
+        }
+        StubManager.busy.insert(folder.id)
+        func finish(_ ok: Bool) {
+            StubManager.busy.remove(folder.id)
+            StubManager.syncIndicator(folder, running: StubManager.hasRunningApp(folder))
+            completion(ok)
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        config.addsToRecentItems = false
+        config.arguments = ["--indicator"]
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { app, error in
+            DispatchQueue.main.async {
+                guard let app, error == nil else { finish(false); return }
+                waitForRunningTile(url: url, app: app, deadline: Date().addingTimeInterval(5), settle: 0.05) { tile in
+                    guard tile != nil else { finish(false); return }
+                    moveTileToPointer(url) { moved in
+                        if moved {
+                            confirmKept(url, deadline: Date().addingTimeInterval(6)) { finish(true) }
+                        } else {
+                            // The pointer left the Dock: keep it where it landed instead.
+                            if let tile = DockAX.shared.item(for: url) { setKept(true, tile: tile) }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { finish(false) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Once the Dock has saved the moved tile as kept, done; if it hasn't after a few seconds,
+    /// keep it from its menu.
+    private static func confirmKept(_ url: URL, deadline: Date, then: @escaping () -> Void) {
+        if DockPrefs.savedContains(url) { then(); return }
+        guard Date() < deadline else {
+            if let tile = DockAX.shared.item(for: url) { setKept(true, tile: tile) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { then() }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { confirmKept(url, deadline: deadline, then: then) }
     }
 }
 

@@ -34,8 +34,8 @@ enum FolderActions {
     }
 
     /// An app dragged onto another app in the Dock: the two become a folder, named after their
-    /// categories, in their place. The folder joins the Dock (silently), slides to where you let
-    /// go, and then the two apps' tiles leave the Dock.
+    /// categories, in their place. Both apps' tiles leave the Dock together, then the folder
+    /// comes in where they were.
     static func combineInDock(dragged: URL, onto target: URL) {
         let apps = [target, dragged]
         let folder = store.create(name: FolderNaming.name(for: apps), apps: apps)
@@ -49,13 +49,40 @@ enum FolderActions {
         EventInterceptor.shared.update(folders: store.folders)
         FolderPanelController.shared.close()
         let spot = DockPrefs.index(of: target)
-        showInDock(folder) { _ in
-            DockLive.moveTileToPointer(folder.stubURL) { moved in
-                // The pointer had left the Dock: it moves into place at the next quiet moment.
-                if !moved, let spot { DockSettle.place(folder.id, at: spot) }
-                takeOutOfDock([dragged, target])
+        takeOutOfDockTogether([dragged, target]) {
+            DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
+            DockLive.placeFolderAtPointer(folder) { placed in
+                if !placed, !DockPrefs.savedContains(folder.stubURL), DockAX.shared.item(for: folder.stubURL) == nil {
+                    // The pointer had left the Dock: in at the end now, into place at the next quiet moment.
+                    showInDock(folder) { _ in if let spot { DockSettle.place(folder.id, at: spot) } }
+                } else if !placed, let spot {
+                    DockSettle.place(folder.id, at: spot)
+                }
+                EventInterceptor.shared.update(folders: store.folders)
+                NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
             }
         }
+    }
+
+    /// Takes apps' tiles out of the Dock all at once (each one's menu pressed right after the
+    /// last), retrying briefly while the Dock finishes a drop.
+    private static func takeOutOfDockTogether(_ urls: [URL], completion: @escaping () -> Void) {
+        urls.forEach(DockPrefs.noteLiveRemoval)
+        var remaining = urls
+        func pass(_ attemptsLeft: Int) {
+            remaining = remaining.filter { url in
+                guard DockAX.shared.item(for: url) != nil else { return false }   // already gone
+                return !DockLive.unpinApp(at: url)
+            }
+            guard !remaining.isEmpty, attemptsLeft > 1 else {
+                if !remaining.isEmpty { DockPrefs.modify { _ in } }   // the Dock wouldn't answer: restart it
+                // A beat for the poofs before anything else moves.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { completion() }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { pass(attemptsLeft - 1) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { pass(8) }
     }
 
     /// Creates a folder and adds its tile to the end of the Dock's apps.
@@ -194,12 +221,14 @@ enum FolderActions {
         if response == .OK { add(panel.urls, to: folderID, removeFromDock: false) }
     }
 
-    static func removeApp(_ url: URL, from folderID: String) {
+    /// `deleteIfEmpty`: from the folder itself, taking out its last app deletes the folder (like
+    /// iOS). From Settings it's kept, empty and out of the Dock, until apps are added again.
+    static func removeApp(_ url: URL, from folderID: String, deleteIfEmpty: Bool = false) {
         guard let folder = store.update(folderID, { $0.apps.removeAll { $0 == url.path } }) else { return }
         StubManager.refreshTile(folder)
         FolderPanelController.shared.reload()
-        // Nothing left to show: the folder leaves the Dock until an app is added again.
-        if folder.apps.isEmpty { removeFromDock(folderID) }
+        guard folder.apps.isEmpty else { return }
+        if deleteIfEmpty { delete(folderID) } else { removeFromDock(folderID) }
     }
 
     static func moveAppToDock(_ url: URL, from folderID: String) {
@@ -219,8 +248,8 @@ enum FolderActions {
                 DockSettle.addApp(url, near: folderID)
             }
         }
-        // Its last app: the folder leaves the Dock.
-        if folder.apps.isEmpty, DockPrefs.containsTile(for: dockURL(for: folder)) { hideFromDock(folder) }
+        // Its last app: the folder goes (like iOS).
+        if folder.apps.isEmpty { delete(folderID) }
     }
 
     /// Empty folders have nothing to show, so they're kept out of the Dock.

@@ -28,7 +28,7 @@ enum AppMenu {
         }
 
         entries.append(.submenu("Options", [
-            .action("Remove from Folder") { FolderActions.removeApp(app.url, from: folderID) },
+            .action("Remove from Folder") { FolderActions.removeApp(app.url, from: folderID, deleteIfEmpty: true) },
             .action("Move to Dock") { FolderActions.moveAppToDock(app.url, from: folderID) },
             .separator,
             .action("Show in Finder") {

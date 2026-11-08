@@ -69,9 +69,10 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   pointer where the Dock draws that tile's name label (measured: 5 pt pointer, tip 7.5 pt inside
   the tile's top). That keeps it clear of the Dock and hides the Dock's own label behind it; a
   frosted strip along the bottom edge stops that label showing through the glass.
-- **Empty folders stay out of the Dock.** A new folder joins the Dock when its first app is added,
-  and leaves it if its last app is removed (unless you turned **Show in Dock** off, which is
-  remembered).
+- **Empty folders.** Taking the last app out of a folder from the folder itself (dragging it out,
+  **Move to Dock** or **Remove from Folder**) deletes the folder, like iOS. Empty folders made or
+  emptied in Settings stay, out of the Dock, and join it when their first app is added (unless you
+  turned **Show in Dock** off, which is remembered).
 - **Changing the Dock without restarting it.** Restarting the Dock redraws the wallpaper and the
   menu bar, so Dock Folders avoids it. It changes the Dock through the Dock's own right-click menu
   instead (**Options ▸ Keep in Dock / Remove from Dock**, pressed through Accessibility, in the
@@ -85,10 +86,11 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   outlined; let go on the folder or inside it and the app goes in (the Dock removes its tile). A
   quick pass over a folder doesn't count, so rearranging the Dock works as usual.
 - **Making a folder by dragging.** Holding a dragged app over another app shows a **Create
-  Folder** tag above it, drawn like the Dock's own name tags. Let go and the new folder is pinned
-  (silently), slid to where you let go with a drag sent only to the Dock (the Dock drops dragged
-  tiles under the real pointer, so this only runs while the pointer is still on the Dock), and the
-  two apps' tiles leave the Dock.
+  Folder** tag above it, drawn like the Dock's own name tags. Let go and both apps' tiles leave the
+  Dock together, then the folder comes in where they were: its little app runs, so the Dock adds it
+  like any app that opens, and it's slid under the pointer with a drag sent only to the Dock (the
+  Dock drops dragged tiles under the real pointer, so this needs the pointer still on the Dock).
+  Moving an open app's tile also keeps it in the Dock, so no menu is involved.
 - **Folder names.** New folders are named after their apps' App Store categories
   (`LSApplicationCategoryType`), like iOS: two games make "Games"; related categories get a group
   name ("Creativity", "Productivity & Finance", "Utilities"…); otherwise the category of the app
