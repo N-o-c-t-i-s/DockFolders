@@ -148,10 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FolderPanelController.shared.close(animated: false)
         }
         // Folder tiles get the Dock's running dot while any app inside is running.
-        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
-            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.refreshRunningDots()
-            }
+        RunningApps.shared.start()
+        NotificationCenter.default.addObserver(forName: RunningApps.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshRunningDots()
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication

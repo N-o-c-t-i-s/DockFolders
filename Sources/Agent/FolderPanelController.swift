@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+
 import SwiftUI
 
 /// A borderless, non-activating panel: clicking it never steals focus from your current app.
@@ -44,6 +45,7 @@ final class FolderPanelController: NSObject {
     private(set) var folderID: String?
     private var holdingDock = false
     private var observers: [NSObjectProtocol] = []
+    private var runningObserver: NSObjectProtocol?
     private var displayLink: CADisplayLink?
     private var frameCount = 0
 
@@ -788,11 +790,9 @@ final class FolderPanelController: NSObject {
         observers.append(center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.close()
         })
-        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
-                     NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
-            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.refreshRunningState()
-            })
+        // Apps launching and quitting: keep the running dots right.
+        runningObserver = NotificationCenter.default.addObserver(forName: RunningApps.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshRunningState()
         }
     }
 
@@ -806,21 +806,28 @@ final class FolderPanelController: NSObject {
         swiping = false
         observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         observers.removeAll()
+        if let runningObserver { NotificationCenter.default.removeObserver(runningObserver) }
+        runningObserver = nil
     }
 
     private func refreshRunningState() {
+        guard isOpen else { return }
         let running = Self.runningAppPaths()
-        model.apps = model.apps.map { app in
+        let updated = model.apps.map { app in
             var app = app
             app.isRunning = running.contains(app.url.standardizedFileURL.path)
             return app
         }
+        if updated != model.apps { model.apps = updated }
     }
 
     // MARK: Data
 
+    /// Bundle paths of running apps.
     static func runningAppPaths() -> Set<String> {
-        Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+        Set(NSWorkspace.shared.runningApplications.compactMap { app in
+            app.isTerminated ? nil : app.bundleURL?.standardizedFileURL.path
+        })
     }
 
     static func apps(in folder: Folder) -> [FolderApp] {
