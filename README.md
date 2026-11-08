@@ -71,6 +71,14 @@ starts at login.
      updates, and macOS only lets apps change other apps with this permission.
 3. Drag an app onto another app in the Dock and hold it there until **Create Folder** appears.
 
+Or with [Homebrew](https://brew.sh):
+
+```bash
+brew tap myles-dean/tap
+brew trust myles-dean/tap
+brew install --cask dock-folders
+```
+
 Requires **macOS 26 Tahoe** or later on a Mac with Apple silicon.
 
 ## How to use it
