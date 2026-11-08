@@ -1,0 +1,585 @@
+import AppKit
+import ServiceManagement
+import SwiftUI
+
+// Dock Folders' only window: manage folders, in a System Settings–style sidebar layout.
+// Opened from a folder's right-click menu, or by opening the app again (Spotlight, Finder).
+
+enum SettingsPage: Hashable {
+    case folder(String)
+    case general
+}
+
+final class SettingsModel: ObservableObject {
+    @Published var folders: [Folder] = []
+    @Published var inDock: Set<String> = []
+    @Published var openAtLogin = false
+    @Published var accessibilityAllowed = false
+    @Published var selection: SettingsPage?
+    @Published var confirmingDelete: Folder?
+
+    // Folder appearance (Settings → General).
+    @Published var showsNames = FolderPrefs.showsNames { didSet { FolderPrefs.showsNames = showsNames } }
+    @Published var iconSize = Double(FolderPrefs.iconSize) {
+        didSet { if abs(iconSize - Double(FolderPrefs.iconSize)) > 0.01 { FolderPrefs.customIconSize = CGFloat(iconSize) } }
+    }
+    @Published var magnifies = FolderPrefs.magnifies { didSet { FolderPrefs.magnifies = magnifies } }
+    @Published var magnification = Double(FolderPrefs.magnification) {
+        didSet { FolderPrefs.magnification = CGFloat(magnification) }
+    }
+
+    var usesDockIconSize: Bool { FolderPrefs.customIconSize == nil }
+
+    func matchDockIconSize() {
+        FolderPrefs.customIconSize = nil
+        iconSize = Double(FolderPrefs.dockIconSize)
+        objectWillChange.send()
+    }
+
+    private var observer: NSObjectProtocol?
+
+    init() {
+        reload()
+        observer = NotificationCenter.default.addObserver(forName: FolderStore.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.reload()
+        }
+    }
+
+    func reload() {
+        folders = FolderStore.shared.folders
+        inDock = Set(folders.filter { DockPrefs.containsTile(for: $0.stubURL) || FolderActions.hasPendingRename($0.id) }.map(\.id))
+        openAtLogin = SMAppService.mainApp.status == .enabled
+        if usesDockIconSize { iconSize = Double(FolderPrefs.dockIconSize) }
+        accessibilityAllowed = AXIsProcessTrusted()
+        if case .folder(let id) = selection, folder(id) == nil { selection = folders.first.map { .folder($0.id) } ?? .general }
+        if selection == nil { selection = folders.first.map { .folder($0.id) } ?? .general }
+    }
+
+    func folder(_ id: String) -> Folder? { folders.first { $0.id == id } }
+
+    var selectedFolder: Folder? {
+        if case .folder(let id) = selection { return folder(id) }
+        return nil
+    }
+
+    func tileImage(_ folder: Folder, size: Int = 128) -> NSImage {
+        let image = NSImage(size: NSSize(width: size / 2, height: size / 2))
+        if let rep = TileRenderer.render(apps: folder.appURLs, pixelSize: size, dark: StubManager.isDarkMode) {
+            image.addRepresentation(rep)
+        }
+        return image
+    }
+
+    func setInDock(_ id: String, _ on: Bool) {
+        // Remembered, so a hidden folder doesn't come back on its own when apps are added.
+        FolderStore.shared.update(id) { $0.keepOutOfDock = on ? nil : true }
+        if on { FolderActions.putBackInDock([id]) } else { FolderActions.removeFromDock(id) }
+        reload()
+    }
+
+    func setOpenAtLogin(_ on: Bool) {
+        if on { try? SMAppService.mainApp.register() } else { try? SMAppService.mainApp.unregister() }
+        reload()
+    }
+
+    func addFolder() {
+        if let id = FolderActions.newEmptyFolder() {
+            reload()
+            selection = .folder(id)
+        }
+    }
+
+    func deleteSelected() {
+        confirmingDelete = selectedFolder
+    }
+
+    func confirmDelete(_ folder: Folder) {
+        let index = folders.firstIndex { $0.id == folder.id } ?? 0
+        FolderActions.delete(folder.id)
+        reload()
+        let remaining = folders
+        selection = remaining.isEmpty ? .general : .folder(remaining[min(index, remaining.count - 1)].id)
+    }
+}
+
+// MARK: - Layout
+
+struct SettingsView: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        NavigationSplitView {
+            // Drawn by hand (not a List) so rows keep a normal height with real space between them.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Folders")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 8)
+                        .padding(.bottom, 3)
+                    ForEach(model.folders) { folder in
+                        SidebarRow(model: model, folder: folder)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+            }
+            // Starts just under the window buttons rather than below a full toolbar's height.
+            .safeAreaPadding(.top, 38)
+            .ignoresSafeArea(.container, edges: .top)
+            .safeAreaInset(edge: .bottom, spacing: 0) { AddRemoveBar(model: model) }
+            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 280)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            Group {
+                switch model.selection {
+                case .folder(let id):
+                    FolderDetailView(model: model, folderID: id).id(id)
+                case .general, .none:
+                    GeneralView(model: model)
+                }
+            }
+            .frame(minWidth: 380)
+            // The toolbar strip is empty, so pages start up beside the window buttons.
+            .ignoresSafeArea(.container, edges: .top)
+        }
+        // The sidebar runs the full height under the window buttons; no title in the toolbar.
+        .toolbar(removing: .title)
+        .frame(minWidth: 640, idealWidth: 700, minHeight: 440, idealHeight: 520)
+        .alert(
+            "Delete “\(model.confirmingDelete?.name ?? "Folder")”?",
+            isPresented: Binding(get: { model.confirmingDelete != nil }, set: { if !$0 { model.confirmingDelete = nil } }),
+            presenting: model.confirmingDelete
+        ) { folder in
+            Button("Delete", role: .destructive) { model.confirmDelete(folder) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The apps inside stay installed. Only the folder is removed from your Dock.")
+        }
+    }
+}
+
+/// One folder in the sidebar: icon and name, with a rounded highlight when selected.
+private struct SidebarRow: View {
+    @ObservedObject var model: SettingsModel
+    let folder: Folder
+
+    private var selected: Bool { model.selection == .folder(folder.id) }
+
+    var body: some View {
+        Button { model.selection = .folder(folder.id) } label: {
+            HStack(spacing: 8) {
+                Image(nsImage: model.tileImage(folder, size: 64))
+                    .resizable()
+                    .frame(width: 22, height: 22)
+                Text(folder.name)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? Color.primary.opacity(0.12) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The + / − buttons under the sidebar list (like other macOS settings lists), and General.
+private struct AddRemoveBar: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 0) {
+                Button { model.addFolder() } label: {
+                    Image(systemName: "plus").frame(width: 26, height: 22)
+                }
+                .help("New Folder")
+                Divider().frame(height: 14)
+                Button { model.deleteSelected() } label: {
+                    Image(systemName: "minus").frame(width: 26, height: 22)
+                }
+                .help("Delete Folder")
+                .disabled(model.selectedFolder == nil)
+                Spacer()
+                Button { model.selection = .general } label: {
+                    Image(systemName: "gearshape")
+                        .foregroundStyle(model.selection == .general ? Color.accentColor : Color.secondary)
+                        .frame(width: 26, height: 22)
+                }
+                .help("General")
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+        }
+        .background(.bar)
+    }
+}
+
+// MARK: - Folder page
+
+private struct FolderDetailView: View {
+    @ObservedObject var model: SettingsModel
+    let folderID: String
+    @State private var name = ""
+    @State private var savedNote: String?
+    @FocusState private var editingName: Bool
+    /// The apps in their on-screen order.
+    @State private var order: [URL] = []
+
+    init(model: SettingsModel, folderID: String) {
+        self.model = model
+        self.folderID = folderID
+        // Filled in up front (not on appear), so the page never shows an empty name or list.
+        let folder = model.folder(folderID)
+        _name = State(initialValue: folder?.name ?? "")
+        _order = State(initialValue: folder?.appURLs ?? [])
+    }
+
+    var body: some View {
+        if let folder = model.folder(folderID) {
+            Form {
+                Section {
+                    HStack(spacing: 14) {
+                        Image(nsImage: model.tileImage(folder))
+                            .resizable()
+                            .frame(width: 56, height: 56)
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Not selected when the page opens: click it to edit.
+                            TextField("Name", text: $name, prompt: Text("Folder"))
+                                .labelsHidden()
+                                .textFieldStyle(.plain)
+                                .font(.title3.weight(.semibold))
+                                .focused($editingName)
+                                .onSubmit { save() }
+                            if let savedNote {
+                                Label(savedNote, systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .transition(.opacity)
+                            } else {
+                                Text("Shown when you point at it in the Dock")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        if isEdited(folder) {
+                            Button("Save") { save() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .keyboardShortcut(.defaultAction)
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        }
+                    }
+                    .animation(.snappy(duration: 0.2), value: isEdited(folder))
+                    .animation(.snappy(duration: 0.2), value: savedNote)
+                    Toggle(isOn: Binding(
+                        get: { model.inDock.contains(folderID) },
+                        set: { model.setInDock(folderID, $0) }
+                    )) {
+                        Text("Show in Dock")
+                        if folder.apps.isEmpty {
+                            Text("Add an app first. Empty folders stay out of the Dock.")
+                        }
+                    }
+                    .disabled(folder.apps.isEmpty)
+                }
+
+                Section {
+                    if order.isEmpty {
+                        Text("No apps yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ReorderableApps(order: $order) { FolderActions.setAppOrder(folderID, $0) } remove: {
+                            FolderActions.removeApp($0, from: folderID)
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Apps")
+                        Spacer()
+                        Button { FolderActions.chooseApps(for: folderID) } label: {
+                            Image(systemName: "plus")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Add Apps")
+                    }
+                } footer: {
+                    Text("Drag to reorder. The first four show on the folder’s icon.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .onAppear {
+                DispatchQueue.main.async { editingName = false }
+            }
+            .onChange(of: folder.apps) { _, apps in order = apps.map { URL(fileURLWithPath: $0) } }
+            .onChange(of: editingName) { _, editing in if !editing { save() } }
+            .onDisappear { save() }
+        }
+    }
+
+    private func trimmed() -> String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func isEdited(_ folder: Folder) -> Bool { !trimmed().isEmpty && trimmed() != folder.name }
+
+    private func save() {
+        guard let folder = model.folder(folderID), isEdited(folder) else { return }
+        FolderActions.rename(folderID, to: name)
+        editingName = false
+        savedNote = FolderActions.hasPendingRename(folderID)
+            ? "Saved — the Dock shows the new name when you close Settings"
+            : "Saved"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { savedNote = nil }
+    }
+}
+
+/// The folder's apps as a list you can drag to reorder: the row lifts and follows the pointer,
+/// the others slide aside, and it settles into its new place when you let go.
+private struct ReorderableApps: View {
+    @Binding var order: [URL]
+    let save: ([URL]) -> Void
+    let remove: (URL) -> Void
+
+    @State private var dragging: URL?
+    @State private var startIndex = 0
+    @State private var targetIndex = 0
+    @State private var dragOffset: CGFloat = 0
+    private let rowHeight: CGFloat = 44
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(order.enumerated()), id: \.element.path) { index, url in
+                let lifted = dragging == url
+                AppRow(url: url) { remove(url) }
+                    .frame(height: rowHeight)
+                    .overlay(alignment: .top) {
+                        if index > 0, dragging == nil { Divider().padding(.leading, 36) }
+                    }
+                    .background {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(.background.secondary)
+                            .shadow(color: .black.opacity(0.25), radius: 10, y: 3)
+                            .padding(.horizontal, -8)
+                            .opacity(lifted ? 1 : 0)
+                    }
+                    .scaleEffect(lifted ? 1.02 : 1)
+                    .offset(y: offset(index: index, url: url))
+                    .zIndex(lifted ? 1 : 0)
+                    .contentShape(Rectangle())
+                    .gesture(drag(url: url, index: index))
+            }
+        }
+        // Measured against the list (not the moving row), so the lifted row tracks the pointer exactly.
+        .coordinateSpace(name: "reorder")
+    }
+
+    private func offset(index: Int, url: URL) -> CGFloat {
+        guard let dragging else { return 0 }
+        if url == dragging { return dragOffset }
+        if startIndex < targetIndex, index > startIndex, index <= targetIndex { return -rowHeight }
+        if startIndex > targetIndex, index >= targetIndex, index < startIndex { return rowHeight }
+        return 0
+    }
+
+    private func drag(url: URL, index: Int) -> some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named("reorder"))
+            .onChanged { value in
+                if dragging == nil {
+                    withAnimation(.snappy(duration: 0.18)) { dragging = url }
+                    startIndex = index
+                    targetIndex = index
+                }
+                dragOffset = value.translation.height
+                let target = min(max(startIndex + Int((dragOffset / rowHeight).rounded()), 0), order.count - 1)
+                if target != targetIndex {
+                    withAnimation(.snappy(duration: 0.22)) { targetIndex = target }
+                }
+            }
+            .onEnded { _ in
+                let from = startIndex, to = targetIndex
+                // Settle into the new spot, then commit the order.
+                withAnimation(.snappy(duration: 0.2)) { dragOffset = CGFloat(to - from) * rowHeight }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    var reordered = order
+                    reordered.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        order = reordered
+                        dragging = nil
+                        dragOffset = 0
+                    }
+                    if from != to { save(reordered) }
+                }
+            }
+    }
+}
+
+private struct AppRow: View {
+    let url: URL
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                .resizable()
+                .frame(width: 26, height: 26)
+            Text(FolderPanelController.displayName(of: url))
+            Spacer()
+            Button(action: remove) {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove from Folder")
+        }
+    }
+}
+
+// MARK: - General page
+
+private struct GeneralView: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Open at login", isOn: Binding(get: { model.openAtLogin }, set: { model.setOpenAtLogin($0) }))
+                LabeledContent("Accessibility") {
+                    if model.accessibilityAllowed {
+                        Label("Allowed", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button("Open Privacy Settings…") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                        }
+                    }
+                }
+            }
+
+            Section {
+                Picker("Under each app", selection: $model.showsNames) {
+                    Text("Running Indicator").tag(false)
+                    Text("Name").tag(true)
+                }
+                Slider(value: $model.iconSize,
+                       in: Double(FolderPrefs.iconSizeRange.lowerBound)...Double(max(FolderPrefs.iconSizeRange.upperBound, FolderPrefs.dockIconSize))) {
+                    Text("Icon size")
+                } minimumValueLabel: {
+                    Text("Small")
+                } maximumValueLabel: {
+                    Text("Large")
+                }
+                Toggle("Magnification", isOn: $model.magnifies)
+                if model.magnifies {
+                    Slider(value: $model.magnification,
+                           in: Double(FolderPrefs.magnificationRange.lowerBound)...Double(FolderPrefs.magnificationRange.upperBound)) {
+                        Text("Strength")
+                    } minimumValueLabel: {
+                        Text("Subtle")
+                    } maximumValueLabel: {
+                        Text("Strong")
+                    }
+                }
+            } header: {
+                Text("Inside Folders")
+            } footer: {
+                HStack {
+                    Text(model.usesDockIconSize ? "Icons are the same size as the Dock’s." : "Icons are a different size from the Dock’s.")
+                    if !model.usesDockIconSize {
+                        Button("Match Dock") { model.matchDockIconSize() }
+                            .buttonStyle(.link)
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            Section("Tips") {
+                Tip(symbol: "cursorarrow.click.2", text: "Click a folder in the Dock to open it; drag icons inside to rearrange them.")
+                Tip(symbol: "square.and.arrow.down", text: "Drag an app from Finder onto a folder in the Dock to add it.")
+                Tip(symbol: "shift", text: "⇧ Shift-right-click any app in the Dock to start a folder with it.")
+            }
+
+            Section {
+                Button("Quit Dock Folders", role: .destructive) { NSApp.terminate(nil) }
+            } footer: {
+                Text("Dock Folders runs in the background and starts at login.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct Tip: View {
+    let symbol: String
+    let text: String
+
+    var body: some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Window
+
+final class SettingsController: NSObject, NSWindowDelegate {
+    static let shared = SettingsController()
+
+    private let model = SettingsModel()
+    private var window: NSWindow?
+
+    var isVisible: Bool { window?.isVisible == true }
+
+    /// Opens Settings, optionally on one folder, and brings it to the front.
+    func show(folderID: String? = nil) {
+        FolderPanelController.shared.close()
+        model.reload()
+        if let folderID, model.folder(folderID) != nil { model.selection = .folder(folderID) }
+
+        if window == nil {
+            let host = NSHostingController(rootView: SettingsView(model: model))
+            let window = NSWindow(contentViewController: host)
+            window.title = "Dock Folders"   // for the Window menu; not shown
+            window.titleVisibility = .hidden
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            // An (empty) toolbar is what lets the sidebar run the full height, under the window buttons.
+            window.toolbar = NSToolbar(identifier: "DockFoldersSettings")
+            window.toolbarStyle = .unified
+            window.setContentSize(NSSize(width: 700, height: 520))
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+            window.center()
+            window.setFrameAutosaveName("DockFoldersSettings2")
+            self.window = window
+        }
+        // We're a background app, so ask firmly to come forward.
+        NSApp.activate(ignoringOtherApps: true)
+        window?.orderFrontRegardless()
+        window?.makeKeyAndOrderFront(nil)
+        // Nothing starts out being edited.
+        DispatchQueue.main.async { self.window?.makeFirstResponder(nil) }
+    }
+
+    func close() { window?.performClose(nil) }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.makeFirstResponder(nil)   // saves a name still being edited
+        // Name changes reach the Dock now, in one go (the Dock only reads names when it starts).
+        DispatchQueue.main.async { FolderActions.applyPendingRenames() }
+    }
+}

@@ -1,0 +1,703 @@
+import AppKit
+import QuartzCore
+import SwiftUI
+
+/// A borderless, non-activating panel: clicking it never steals focus from your current app.
+final class FolderPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isFloatingPanel = true
+        // After isFloatingPanel (which resets the level). Must sit above the Dock's window (level 20).
+        level = .popUpMenu
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
+        animationBehavior = .none
+        isReleasedWhenClosed = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+    }
+
+    // Never actually key (the Dock keeps keyboard focus so it stays on screen), but drawn as if it
+    // were: Liquid Glass "recedes" in windows that aren't focused, flattening its edges.
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+    override var isKeyWindow: Bool { true }
+}
+
+/// Shows a folder's popup above its Dock tile and behaves like the Dock's own name label:
+/// it rides on the tile as it magnifies, keeps the Dock up while you're in it, and goes away
+/// (letting an auto-hiding Dock hide) once you've moved off it for a moment.
+final class FolderPanelController: NSObject {
+    static let shared = FolderPanelController()
+
+    private let model = FolderPanelModel()
+    private lazy var panel: FolderPanel = {
+        let panel = FolderPanel()
+        let host = NSHostingView(rootView: FolderPanelView(model: model))
+        host.sizingOptions = []
+        panel.contentView = host
+        return panel
+    }()
+
+    private(set) var folderID: String?
+    private var holdingDock = false
+    private var observers: [NSObjectProtocol] = []
+    private var displayLink: CADisplayLink?
+    private var frameCount = 0
+
+    /// The folder's Dock tile, and its latest (possibly magnified) frame in AX coordinates.
+    private var tileItem: DockItem?
+    private var tileFrame: CGRect = .zero
+    /// The Dock bar (AX list) frame, in Cocoa coordinates; refreshed a few times a second.
+    private var barFrame: CGRect = .zero
+    /// Where the popup currently is (Cocoa): glass including its pointer, and the body alone.
+    private var popupFrame: CGRect = .zero
+    private var bodyFrame: CGRect = .zero
+
+    /// Resting width of one Dock tile (icon + spacing), measured when the popup opens.
+    private var dockPitch: CGFloat?
+    /// When the pointer left the popup and the folder tile (nil while it's on one of them).
+    private var awaySince: Date?
+    /// Whether the pointer has been on the popup or the folder tile since it opened. Until then
+    /// (e.g. opened without the mouse), it stays open until dismissed.
+    private var pointerEngaged = false
+    /// Until this time, losing the Dock's focus (e.g. hiding the frontmost app activated another
+    /// one) re-holds the Dock instead of closing the popup.
+    private var keepOpenUntil = Date.distantPast
+
+    // Swipe paging state.
+    private var scrollMonitor: Any?
+    private var swiping = false
+    private var swipeTranslation: CGFloat = 0
+    private var swipeSamples: [(time: TimeInterval, dx: CGFloat)] = []
+    private var lastWheelStep = Date.distantPast
+
+    var isOpen: Bool { folderID != nil }
+
+    private override init() {
+        super.init()
+        model.onOpen = { [weak self] app in self?.launch(app) }
+        model.onSelectPage = { [weak self] page in self?.go(toPage: page) }
+        model.onDragBegin = { [weak self] app, point in self?.beginDrag(app, at: point) }
+        model.onDragEnd = { [weak self] in self?.endDrag() }
+        model.onMenu = { [weak self] app, point in
+            guard let self, let folderID = self.folderID else { return }
+            GlassMenuController.shared.show(AppMenu.entries(for: app, folderID: folderID), at: point)
+        }
+    }
+
+    // MARK: Showing
+
+    func toggle(folderID: String, item: DockItem?) {
+        if self.folderID == folderID { close(); return }
+        show(folderID: folderID, item: item)
+    }
+
+    func show(folderID: String, item: DockItem?) {
+        guard let folder = FolderStore.shared.folder(id: folderID),
+              let item = item ?? DockAX.shared.item(for: FolderActions.dockURL(for: folder)) else { return }
+        if isOpen { close(animated: false) }
+        stopFollowingTile()
+        // Clicking a Dock icon closes any Dock menu that's open; so does opening a folder.
+        DockAX.shared.dismissMenus()
+
+        self.folderID = folderID
+        dockPitch = DockAX.shared.restingPitch()
+        let apps = Self.apps(in: folder)
+        model.metrics = metrics(for: apps.count, folderName: folder.name)
+        model.apps = apps
+        model.page = 0
+        model.stripOffset = 0
+        model.pointer = nil
+        model.magnificationAmount = 0
+        model.hovering = false
+        model.dragging = nil
+        model.dragLifted = false
+        landing = false
+        awaySince = nil
+        pointerEngaged = false
+
+        tileItem = item
+        tileFrame = item.frame
+        refreshBarFrame()
+        // Opened without the pointer on the Dock (e.g. from the stub): hold it right away.
+        if CoreDock.autoHideEnabled, !isOverDock(NSEvent.mouseLocation) { holdDock() }
+
+        position()
+        model.isPresented = false
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { self.model.isPresented = true }
+        }
+        startWatching()
+    }
+
+    /// Re-reads the open folder (after apps were added/removed or launched/quit).
+    func reload() {
+        guard let folderID else { return }
+        guard let folder = FolderStore.shared.folder(id: folderID) else { close(); return }
+        let apps = Self.apps(in: folder)
+        let newMetrics = metrics(for: apps.count, folderName: folder.name)
+        model.metrics = newMetrics
+        model.apps = apps
+        if model.page >= newMetrics.pages { model.page = newMetrics.pages - 1 }
+        model.stripOffset = -CGFloat(model.page) * newMetrics.bodyWidth
+        position()
+    }
+
+    // MARK: Closing
+
+    func close(animated: Bool = true) {
+        guard isOpen else { return }
+        // If the pointer isn't on an auto-hiding Dock, the Dock is (about to be) sliding away:
+        // go with it, riding down on the tile and fading, rather than shrinking in place.
+        let withDock = animated && CoreDock.autoHideEnabled && !isOverDock(NSEvent.mouseLocation)
+        folderID = nil
+        GlassMenuController.shared.closeAll()
+        stopWatching(keepFollowingTile: withDock)
+        EventInterceptor.shared.setPanelFrame(nil)
+
+        if !animated {
+            model.isPresented = false
+            panel.orderOut(nil)
+        } else if withDock {
+            leavingUntil = Date().addingTimeInterval(0.28)
+            withAnimation(.easeIn(duration: 0.22)) {
+                model.isPresented = false
+                model.magnificationAmount = 0
+                model.hovering = false
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { [weak self] in
+                guard let self, !self.isOpen else { return }
+                self.stopFollowingTile()
+                self.panel.orderOut(nil)
+            }
+        } else {
+            withAnimation(.easeIn(duration: 0.13)) {
+                model.isPresented = false
+                model.pointer = nil
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, !self.isOpen else { return }
+                self.panel.orderOut(nil)
+            }
+        }
+        // An auto-hiding Dock slides away again (unless the pointer is on it).
+        releaseDock()
+    }
+
+    private var leavingUntil: Date?
+
+    private func stopFollowingTile() {
+        leavingUntil = nil
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    // MARK: Holding the Dock
+
+    private func holdDock() {
+        guard CoreDock.autoHideEnabled, !holdingDock else { return }
+        holdingDock = DockAX.shared.holdOpen(selecting: tileItem)
+    }
+
+    private func releaseDock() {
+        guard holdingDock else { return }
+        holdingDock = false
+        DockAX.shared.releaseHold()
+    }
+
+    /// Call before an action that may change the active app (Hide, Quit) but shouldn't close the folder.
+    func stayOpenThroughAppSwitch() {
+        keepOpenUntil = Date().addingTimeInterval(1.5)
+    }
+
+    private var inGracePeriod: Bool { Date() < keepOpenUntil }
+
+    // MARK: Actions
+
+    private func launch(_ app: FolderApp) {
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: app.url, configuration: config) { _, _ in }
+        close()
+    }
+
+    // MARK: Every frame: follow the tile, track the pointer
+
+    @objc private func tick(_ link: CADisplayLink) {
+        // Leaving with the Dock: keep riding on the tile while the Dock slides away.
+        if !isOpen {
+            guard let until = leavingUntil, Date() < until, let tile = tileItem else { return }
+            let frame = AX.frame(tile.element)
+            if frame.width > 0 { tileFrame = frame; position() }
+            return
+        }
+        frameCount += 1
+
+        if let tile = tileItem {
+            let frame = AX.frame(tile.element)
+            if frame.width > 0 {
+                tileFrame = frame
+            } else if frameCount % 30 == 0, let folder = folderID.flatMap(FolderStore.shared.folder(id:)) {
+                tileItem = DockAX.shared.item(for: FolderActions.dockURL(for: folder))   // the Dock restarted
+            }
+        }
+        if frameCount % 10 == 0 { refreshBarFrame() }
+        position()
+        trackPointer()
+    }
+
+    private func trackPointer() {
+        let mouse = NSEvent.mouseLocation
+        let tile = cocoa(tileFrame)
+        let menus = GlassMenuController.shared.isOpen
+        let inMenu = GlassMenuController.shared.contains(mouse)
+        let inPopup = popupFrame.insetBy(dx: -3, dy: -3).contains(mouse)
+        let onTile = tile.insetBy(dx: -2, dy: -2).contains(mouse)
+        let overDock = isOverDock(mouse)
+        // Between the Dock and the popup, across the popup's width: on the way in or out.
+        let approach = approachZone().contains(mouse)
+
+        let dragging = model.dragging != nil
+        if dragging { checkEdgeDwell() }
+        updateMagnification(inside: inPopup && !menus && !dragging, mouse: mouse)
+
+        // An auto-hiding Dock stays up by itself while the pointer is on it (and keeps
+        // magnifying normally). Above it, in or on the way to the popup, hold it up.
+        if CoreDock.autoHideEnabled {
+            if overDock {
+                releaseDock()
+            } else if inPopup || approach || inMenu || dragging {
+                holdDock()
+            }
+        }
+
+        // Off the Dock and not headed into the popup, with nothing holding the Dock: it's sliding
+        // away right now, so close with it instead of lingering above an empty screen edge.
+        if pointerEngaged, CoreDock.autoHideEnabled, !holdingDock, !overDock, !inPopup, !approach, !inMenu, !menus,
+           !dragging, !inGracePeriod {
+            close()
+            return
+        }
+
+        // Close once the pointer has been somewhere else for a moment.
+        if inPopup || onTile { pointerEngaged = true }
+        if inPopup || onTile || approach || inMenu || menus || dragging || !pointerEngaged {
+            awaySince = nil
+        } else if let since = awaySince {
+            if Date().timeIntervalSince(since) > 0.8, !inGracePeriod { close(); return }
+        } else {
+            awaySince = Date()
+        }
+
+        // Esc (or anything else) took the Dock's focus while we were holding it.
+        if holdingDock, frameCount % 6 == 0, !DockAX.shared.isFocused {
+            if inGracePeriod { holdingDock = DockAX.shared.holdOpen(selecting: tileItem); return }
+            holdingDock = false
+            if !overDock { close() }
+        }
+    }
+
+    /// Like the Dock: magnification eases in when the pointer arrives and out when it leaves,
+    /// and follows the pointer smoothly in between. Updated every frame, never animated.
+    private func updateMagnification(inside: Bool, mouse: CGPoint) {
+        let actual = CGPoint(x: mouse.x - bodyFrame.minX, y: bodyFrame.maxY - mouse.y)
+        var pointer = model.pointer
+        if inside {
+            if let current = pointer, model.magnificationAmount > 0.05 {
+                pointer = CGPoint(x: current.x + (actual.x - current.x) * 0.5, y: current.y + (actual.y - current.y) * 0.5)
+            } else {
+                pointer = actual
+            }
+        }
+        var amount = model.magnificationAmount + ((inside ? 1 : 0) - model.magnificationAmount) * 0.22
+        if abs(amount - (inside ? 1 : 0)) < 0.01 { amount = inside ? 1 : 0 }
+        if amount == 0 { pointer = nil }
+
+        guard pointer != model.pointer || amount != model.magnificationAmount || inside != model.hovering else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            model.pointer = pointer
+            model.magnificationAmount = amount
+            model.hovering = inside
+        }
+    }
+
+    private func isOverDock(_ point: CGPoint) -> Bool {
+        guard barFrame.width > 0 else { return false }
+        switch CoreDock.orientation {
+        case .bottom: return point.y <= barFrame.maxY && point.x >= barFrame.minX && point.x <= barFrame.maxX
+        case .left: return point.x <= barFrame.maxX && point.y >= barFrame.minY && point.y <= barFrame.maxY
+        case .right: return point.x >= barFrame.minX && point.y >= barFrame.minY && point.y <= barFrame.maxY
+        }
+    }
+
+    private func approachZone() -> CGRect {
+        switch CoreDock.orientation {
+        case .bottom:
+            return CGRect(x: popupFrame.minX - 16, y: barFrame.maxY - 2,
+                          width: popupFrame.width + 32, height: max(0, popupFrame.minY - barFrame.maxY) + 6)
+        case .left:
+            return CGRect(x: barFrame.maxX - 2, y: popupFrame.minY - 16,
+                          width: max(0, popupFrame.minX - barFrame.maxX) + 6, height: popupFrame.height + 32)
+        case .right:
+            return CGRect(x: popupFrame.maxX - 4, y: popupFrame.minY - 16,
+                          width: max(0, barFrame.minX - popupFrame.maxX) + 6, height: popupFrame.height + 32)
+        }
+    }
+
+    private func refreshBarFrame() {
+        if let list = DockAX.shared.list { barFrame = cocoa(AX.frame(list)) }
+    }
+
+    // MARK: Rearranging (press and drag an icon)
+
+    /// Where the pointer sits within the dragged icon, so it doesn't jump to the cursor.
+    private var dragGrab: CGSize = .zero
+    private var dragMonitor: Any?
+    private var lastDragPoint: CGPoint?
+    private var edgeDwellSince: Date?
+    private var edgeDwellDirection = 0
+    private var lastEdgeFlip = Date.distantPast
+
+    private func bodyPoint(_ screen: CGPoint) -> CGPoint {
+        CGPoint(x: screen.x - bodyFrame.minX, y: bodyFrame.maxY - screen.y)
+    }
+
+    private func beginDrag(_ app: FolderApp, at screenPoint: CGPoint) {
+        guard model.dragging == nil, !landing, let index = model.apps.firstIndex(where: { $0.id == app.id }) else { return }
+        let point = bodyPoint(screenPoint)
+        let center = model.metrics.iconCenter(index % FolderMetrics.appsPerPage)
+        dragGrab = CGSize(width: point.x - center.x, height: point.y - center.y)
+        model.dragging = (app.id, center)
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+            model.dragLifted = true
+            model.magnificationAmount = 0
+        }
+        // Follow the pointer from here on, wherever it goes (even past the popup's edges, or
+        // after the icon has moved to another page).
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseUp { self.endDrag() } else { self.moveDrag(to: NSEvent.mouseLocation) }
+            return event
+        }
+        moveDrag(to: screenPoint)
+    }
+
+    private func moveDrag(to screenPoint: CGPoint) {
+        guard let dragging = model.dragging else { return }
+        lastDragPoint = screenPoint
+        let m = model.metrics
+        let pointer = bodyPoint(screenPoint)
+        let location = CGPoint(x: pointer.x - dragGrab.width, y: pointer.y - dragGrab.height)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { model.dragging = (dragging.id, location) }
+
+        // Pushed against (or past) the folder's left or right edge: flip pages, like iOS.
+        let direction = pointer.x < 4 ? -1 : (pointer.x > m.bodyWidth - 4 ? 1 : 0)
+        if direction != edgeDwellDirection { edgeDwellDirection = direction; edgeDwellSince = direction == 0 ? nil : Date() }
+
+        // Make room once the icon is clearly over a spot on this page (not while it's between two,
+        // so the others don't jitter back and forth).
+        guard let from = model.apps.firstIndex(where: { $0.id == dragging.id }), model.isSettled else { return }
+        let pageStart = model.page * FolderMetrics.appsPerPage
+        let onThisPage = from >= pageStart && from < pageStart + FolderMetrics.appsPerPage
+        let slots = min(FolderMetrics.appsPerPage, model.apps.count - pageStart + (onThisPage ? 0 : 1))
+        guard slots > 0 else { return }
+        func distance(_ slot: Int) -> CGFloat {
+            let c = m.iconCenter(slot)
+            return hypot(c.x - location.x, c.y - location.y)
+        }
+        guard let nearest = (0..<slots).min(by: { distance($0) < distance($1) }),
+              distance(nearest) < m.pitch * 0.42 || !onThisPage else { return }
+        let to = min(pageStart + nearest, model.apps.count - 1)
+        guard to != from else { return }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+            let app = model.apps.remove(at: from)
+            model.apps.insert(app, at: to)
+        }
+    }
+
+    private func checkEdgeDwell() {
+        guard model.dragging != nil, edgeDwellDirection != 0, let since = edgeDwellSince,
+              Date().timeIntervalSince(since) > 0.35, Date().timeIntervalSince(lastEdgeFlip) > 0.75 else { return }
+        let target = model.page + edgeDwellDirection
+        guard target >= 0, target < model.metrics.pages else { return }
+        lastEdgeFlip = Date()
+        go(toPage: target)
+        // Once the new page has settled, carry the icon onto it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak self] in
+            guard let self, let point = self.lastDragPoint else { return }
+            self.moveDrag(to: point)
+        }
+    }
+
+    /// True while a dropped icon glides into its spot.
+    private var landing = false
+
+    private func endDrag() {
+        guard let dragging = model.dragging, !landing else { return }
+        if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
+        dragMonitor = nil
+        edgeDwellDirection = 0
+        edgeDwellSince = nil
+        lastDragPoint = nil
+        saveOrder()
+
+        // Glide from wherever it was let go into its spot, settling back to normal size, then
+        // hand over to the icon in the grid.
+        var target = dragging.location
+        if let index = model.apps.firstIndex(where: { $0.id == dragging.id }) {
+            let slot = index - model.page * FolderMetrics.appsPerPage
+            if (0..<FolderMetrics.appsPerPage).contains(slot) { target = model.metrics.iconCenter(slot) }
+        }
+        landing = true
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
+            model.dragging = (dragging.id, target)
+            model.dragLifted = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+            guard let self else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { self.model.dragging = nil }
+            self.landing = false
+        }
+    }
+
+    /// Saves the folder's new order (the Dock icon's 2×2 preview follows it).
+    private func saveOrder() {
+        guard let folderID, let folder = FolderStore.shared.folder(id: folderID) else { return }
+        let ordered = model.apps.map(\.url.path)
+        let missing = folder.apps.filter { !ordered.contains($0) }   // apps not on disk keep their place at the end
+        guard ordered + missing != folder.apps,
+              let updated = FolderStore.shared.update(folderID, { $0.apps = ordered + missing }) else { return }
+        StubManager.refreshTile(updated)
+    }
+
+    // MARK: Paging (two-finger swipe follows your fingers, then snaps like iOS)
+
+    private func go(toPage page: Int) {
+        let m = model.metrics
+        let target = min(max(page, 0), m.pages - 1)
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            model.page = target
+            model.stripOffset = -CGFloat(target) * m.bodyWidth
+        }
+    }
+
+    private func handleScroll(_ event: NSEvent) {
+        let m = model.metrics
+        guard m.pages > 1, !GlassMenuController.shared.isOpen else { return }
+        let width = m.bodyWidth
+
+        // A classic mouse wheel: one notch, one page.
+        if event.phase.isEmpty && event.momentumPhase.isEmpty {
+            let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY
+            guard abs(delta) > 0.1, Date().timeIntervalSince(lastWheelStep) > 0.35 else { return }
+            lastWheelStep = Date()
+            go(toPage: model.page + (delta < 0 ? 1 : -1))
+            return
+        }
+        // We animate the settle ourselves, so trackpad momentum is ignored.
+        guard event.momentumPhase.isEmpty else { return }
+
+        if event.phase.contains(.began) {
+            swiping = true
+            swipeTranslation = 0
+            swipeSamples.removeAll()
+        }
+        guard swiping else { return }
+
+        if event.phase.contains(.began) || event.phase.contains(.changed) {
+            let dx = event.scrollingDeltaX
+            swipeTranslation += dx
+            swipeSamples.append((event.timestamp, dx))
+            if swipeSamples.count > 8 { swipeSamples.removeFirst() }
+
+            // Follow the fingers, with rubber-banding past the first and last pages.
+            let raw = -CGFloat(model.page) * width + swipeTranslation
+            let lowest = -CGFloat(m.pages - 1) * width
+            var offset = raw
+            if raw > 0 { offset = raw * 0.3 } else if raw < lowest { offset = lowest + (raw - lowest) * 0.3 }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { model.stripOffset = offset }
+        }
+
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+            swiping = false
+            let recent = swipeSamples.filter { event.timestamp - $0.time < 0.1 }
+            var velocity: CGFloat = 0
+            if let first = recent.first, let last = recent.last, last.time > first.time {
+                velocity = recent.map(\.dx).reduce(0, +) / CGFloat(last.time - first.time)
+            }
+            var target = model.page
+            if swipeTranslation < -width * 0.2 || velocity < -300 { target += 1 }
+            else if swipeTranslation > width * 0.2 || velocity > 300 { target -= 1 }
+            go(toPage: target)
+        }
+    }
+
+    // MARK: Geometry
+
+    private func metrics(for count: Int, folderName: String) -> FolderMetrics {
+        let dockIcon = DockGeometry.tileSize ?? (dockPitch.map { $0 - 4 } ?? 52)
+        let dockGap = max((dockPitch ?? dockIcon + 4) - dockIcon, 2)
+        // Icons at the size chosen in Settings (the Dock's by default), spaced in proportion.
+        let icon = FolderPrefs.customIconSize ?? dockIcon
+        let pitch = icon + dockGap * icon / dockIcon
+        let magnification = FolderPrefs.magnificationScale
+        let names = FolderPrefs.showsNames
+        let probe = FolderMetrics(iconSize: icon, dockPitch: pitch, appCount: count,
+                                  minBodyWidth: 0, magnification: magnification, showsNames: names)
+        // Wide enough that the Dock's name label for this folder hides behind the straight part
+        // of the popup's bottom edge.
+        let minWidth = DockLabel.width(for: folderName) + probe.cornerRadius * 1.4
+        return FolderMetrics(iconSize: icon, dockPitch: pitch, appCount: count,
+                             minBodyWidth: minWidth, magnification: magnification, showsNames: names)
+    }
+
+    private var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
+
+    private func cocoa(_ r: CGRect) -> CGRect {
+        CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
+    }
+
+    /// Puts the popup's pointer exactly where the Dock would put this tile's name label:
+    /// just above the tile, riding up and down with magnification.
+    private func position() {
+        guard tileFrame.width > 0 else { return }
+        let m = model.metrics
+        let bodyW = m.bodyWidth, bodyH = m.bodyHeight
+        let arrow = FolderMetrics.arrowHeight
+        let tile = cocoa(tileFrame)
+        let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: tile.midX, y: tile.midY)) }
+            ?? NSScreen.main ?? NSScreen.screens[0]
+        let bounds = screen.frame.insetBy(dx: 8, dy: 8)
+        let inset = DockLabel.tipInset
+
+        var glass: CGRect
+        switch CoreDock.orientation {
+        case .bottom:
+            model.arrowEdge = .bottom
+            let tipX = tile.midX, tipY = tile.maxY - inset
+            let bodyX = min(max(tipX - bodyW / 2, bounds.minX), bounds.maxX - bodyW)
+            setArrowPosition(tipX - bodyX)
+            glass = CGRect(x: bodyX, y: tipY, width: bodyW, height: bodyH + arrow)
+            bodyFrame = CGRect(x: bodyX, y: tipY + arrow, width: bodyW, height: bodyH)
+        case .left:
+            model.arrowEdge = .leading
+            let tipX = tile.maxX - inset, tipY = tile.midY
+            let bodyTop = min(max(tipY + bodyH / 2, bounds.minY + bodyH), bounds.maxY)
+            setArrowPosition(bodyTop - tipY)
+            glass = CGRect(x: tipX, y: bodyTop - bodyH, width: bodyW + arrow, height: bodyH)
+            bodyFrame = CGRect(x: tipX + arrow, y: bodyTop - bodyH, width: bodyW, height: bodyH)
+        case .right:
+            model.arrowEdge = .trailing
+            let tipX = tile.minX + inset, tipY = tile.midY
+            let bodyTop = min(max(tipY + bodyH / 2, bounds.minY + bodyH), bounds.maxY)
+            setArrowPosition(bodyTop - tipY)
+            glass = CGRect(x: tipX - arrow - bodyW, y: bodyTop - bodyH, width: bodyW + arrow, height: bodyH)
+            bodyFrame = CGRect(x: tipX - arrow - bodyW, y: bodyTop - bodyH, width: bodyW, height: bodyH)
+        }
+        popupFrame = glass
+
+        // Snap to whole pixels so following the tile never makes the glass shimmer.
+        let scale = screen.backingScaleFactor
+        func snap(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+        glass.origin = CGPoint(x: snap(glass.minX), y: snap(glass.minY))
+        bodyFrame.origin = CGPoint(x: snap(bodyFrame.minX), y: snap(bodyFrame.minY))
+        popupFrame = glass
+        let content = m.contentSize(arrowOnSide: CoreDock.orientation != .bottom)
+        let frame = CGRect(x: glass.minX - FolderMetrics.marginH, y: glass.minY - FolderMetrics.marginBottom,
+                           width: content.width, height: content.height)
+        if frame != panel.frame { panel.setFrame(frame, display: true) }
+        guard isOpen else { return }
+        EventInterceptor.shared.setPanelFrame(CGRect(x: glass.minX, y: primaryHeight - glass.maxY,
+                                                     width: glass.width, height: glass.height))
+    }
+
+    private func setArrowPosition(_ value: CGFloat) {
+        if abs(model.arrowPosition - value) > 0.25 { model.arrowPosition = value }
+    }
+
+    // MARK: Watching for reasons to close
+
+    private func startWatching() {
+        stopWatching()
+        frameCount = 0
+        let link = panel.displayLink(target: self, selector: #selector(tick(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, event.window === self.panel else { return event }
+            self.handleScroll(event)
+            return nil
+        }
+        let center = NSWorkspace.shared.notificationCenter
+        observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            guard let self, !self.inGracePeriod else { return }
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if app?.processIdentifier != ProcessInfo.processInfo.processIdentifier { self.close() }
+        })
+        observers.append(center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.close()
+        })
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
+                     NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.refreshRunningState()
+            })
+        }
+    }
+
+    private func stopWatching(keepFollowingTile: Bool = false) {
+        if !keepFollowingTile {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
+        swiping = false
+        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers.removeAll()
+    }
+
+    private func refreshRunningState() {
+        let running = Self.runningAppPaths()
+        model.apps = model.apps.map { app in
+            var app = app
+            app.isRunning = running.contains(app.url.standardizedFileURL.path)
+            return app
+        }
+    }
+
+    // MARK: Data
+
+    static func runningAppPaths() -> Set<String> {
+        Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+    }
+
+    static func apps(in folder: Folder) -> [FolderApp] {
+        let running = runningAppPaths()
+        return folder.appURLs.compactMap { url in
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return FolderApp(url: url, name: displayName(of: url),
+                             icon: NSWorkspace.shared.icon(forFile: url.path),
+                             isRunning: running.contains(url.standardizedFileURL.path))
+        }
+    }
+
+    static func displayName(of url: URL) -> String {
+        let name = FileManager.default.displayName(atPath: url.path)
+        return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+}

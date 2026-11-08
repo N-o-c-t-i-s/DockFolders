@@ -1,0 +1,207 @@
+import AppKit
+
+/// A Quartz event tap that catches clicks on folder tiles in the Dock before the Dock sees them.
+///
+/// • Click a folder tile      → open its popup (the Dock never launches the stub).
+/// • Drag a folder tile       → replayed to the Dock, so tiles can still be rearranged.
+/// • Right-click a folder     → our folder menu.
+/// • ⇧ right-click any app    → "New Folder" / "Add to Folder" menu.
+/// • Click anywhere else while a popup is open → close it.
+final class EventInterceptor {
+    static let shared = EventInterceptor()
+
+    // Main-thread callbacks.
+    var onFolderClick: ((String, DockItem) -> Void)?
+    var onFolderMenu: ((String, DockItem) -> Void)?
+    var onDockAppMenu: ((DockItem) -> Void)?
+    var onOutsideClick: (() -> Void)?
+    var onMenuOutsideClick: (() -> Void)?
+
+    private let replayMarker: Int64 = 0x44_46_4F_4C // "DFOL"
+    private var tap: CFMachPort?
+
+    // Shared with the tap thread.
+    private let lock = NSLock()
+    private var stubPaths: [String: String] = [:]   // normalised stub path → folder id
+    private var panelFrame: CGRect?                  // global, top-left origin
+    private var menuFrames: [CGRect] = []            // open glass menus, same space
+    private var screenFrames: [CGRect] = []          // global, top-left origin
+
+    // Tap-thread only.
+    private var pending: (event: CGEvent, folderID: String, item: DockItem, start: CGPoint)?
+    private var swallowLeftUp = false
+    private var swallowRightUp = false
+
+    var isRunning: Bool { tap != nil }
+
+    // MARK: State updates (main thread)
+
+    func update(folders: [Folder]) {
+        var map: [String: String] = [:]
+        for folder in folders {
+            map[folder.stubURL.standardizedFileURL.resolvingSymlinksInPath().path] = folder.id
+            // A renamed folder's tile points at its old stub until the Dock restarts.
+            map[FolderActions.dockURL(for: folder).standardizedFileURL.resolvingSymlinksInPath().path] = folder.id
+        }
+        lock.withLock { stubPaths = map }
+    }
+
+    func setPanelFrame(_ frame: CGRect?) { lock.withLock { panelFrame = frame } }
+    func setMenuFrames(_ frames: [CGRect]) { lock.withLock { menuFrames = frames } }
+
+    func updateScreens() {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let frames = NSScreen.screens.map { s in
+            CGRect(x: s.frame.minX, y: primaryHeight - s.frame.maxY, width: s.frame.width, height: s.frame.height)
+        }
+        lock.withLock { screenFrames = frames }
+    }
+
+    // MARK: Tap lifecycle
+
+    @discardableResult
+    func start() -> Bool {
+        guard tap == nil else { return true }
+        updateScreens()
+        let types: [CGEventType] = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp, .otherMouseDown]
+        let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, refcon in
+                let me = Unmanaged<EventInterceptor>.fromOpaque(refcon!).takeUnretainedValue()
+                return me.handle(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else { return false }
+        self.tap = tap
+
+        let thread = Thread {
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            CFRunLoopRun()
+        }
+        thread.name = "Dock Folders event tap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        return true
+    }
+
+    // MARK: Event handling (tap thread)
+
+    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let pass = Unmanaged.passUnretained(event)
+
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return pass
+        }
+        if event.getIntegerValueField(.eventSourceUserData) == replayMarker { return pass }
+
+        let location = event.location
+        let (panel, menus) = lock.withLock { (panelFrame, menuFrames) }
+
+        // While one of our menus is open, a click outside it only dismisses it (like a real menu).
+        if !menus.isEmpty {
+            if menus.contains(where: { $0.contains(location) }) { return pass }
+            switch type {
+            case .leftMouseDown: swallowLeftUp = true; main { self.onMenuOutsideClick?() }; return nil
+            case .rightMouseDown: swallowRightUp = true; main { self.onMenuOutsideClick?() }; return nil
+            case .otherMouseDown: main { self.onMenuOutsideClick?() }; return nil
+            default: break
+            }
+        }
+        if type == .leftMouseUp, swallowLeftUp { swallowLeftUp = false; return nil }
+        if type == .rightMouseUp, swallowRightUp { swallowRightUp = false; return nil }
+        if let panel, panel.contains(location) { return pass }   // clicks inside the popup
+
+        switch type {
+        case .leftMouseDown:
+            if let (id, item) = folderHit(at: location) {
+                if event.flags.contains(.maskControl) {          // control-click = right-click
+                    swallowLeftUp = true
+                    main { self.onFolderMenu?(id, item) }
+                } else if let copy = event.copy() {
+                    pending = (copy, id, item, location)
+                }
+                return nil
+            }
+            if panel != nil { main { self.onOutsideClick?() } }
+
+        case .leftMouseDragged:
+            if let p = pending {
+                if hypot(location.x - p.start.x, location.y - p.start.y) > 5 {
+                    // It's a drag: hand the original press and this drag to the Dock.
+                    pending = nil
+                    p.event.setIntegerValueField(.eventSourceUserData, value: replayMarker)
+                    p.event.post(tap: .cgSessionEventTap)
+                    if let drag = event.copy() {
+                        drag.setIntegerValueField(.eventSourceUserData, value: replayMarker)
+                        drag.post(tap: .cgSessionEventTap)
+                    }
+                }
+                return nil
+            }
+
+        case .leftMouseUp:
+            if let p = pending {
+                pending = nil
+                main { self.onFolderClick?(p.folderID, p.item) }
+                return nil
+            }
+
+        case .rightMouseDown:
+            if let (id, item) = folderHit(at: location) {
+                swallowRightUp = true
+                main { self.onFolderMenu?(id, item) }
+                return nil
+            }
+            if event.flags.contains(.maskShift), let item = appHit(at: location) {
+                swallowRightUp = true
+                main { self.onDockAppMenu?(item) }
+                return nil
+            }
+            if panel != nil { main { self.onOutsideClick?() } }
+
+        case .otherMouseDown:
+            if panel != nil { main { self.onOutsideClick?() } }
+
+        default:
+            break
+        }
+        return pass
+    }
+
+    /// Cheap check before asking the Dock: is the point near a screen edge the Dock could be on?
+    private func nearDockEdge(_ p: CGPoint) -> Bool {
+        let band: CGFloat = 220
+        let screens = lock.withLock { screenFrames }
+        for s in screens where s.contains(p) {
+            switch CoreDock.orientation {
+            case .bottom: return p.y > s.maxY - band
+            case .left: return p.x < s.minX + band
+            case .right: return p.x > s.maxX - band
+            }
+        }
+        return false
+    }
+
+    private func folderHit(at p: CGPoint) -> (String, DockItem)? {
+        guard nearDockEdge(p), let item = DockAX.shared.item(at: p), let url = item.url else { return nil }
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        guard let id = lock.withLock({ stubPaths[path] }) else { return nil }
+        return (id, item)
+    }
+
+    private func appHit(at p: CGPoint) -> DockItem? {
+        guard nearDockEdge(p), let item = DockAX.shared.item(at: p),
+              item.subrole == "AXApplicationDockItem", let url = item.url, url.pathExtension == "app" else { return nil }
+        let bundleID = Bundle(url: url)?.bundleIdentifier
+        if bundleID == "com.apple.finder" || bundleID == "com.apple.apps.launcher" { return nil }
+        if lock.withLock({ stubPaths[url.standardizedFileURL.resolvingSymlinksInPath().path] }) != nil { return nil }
+        return item
+    }
+
+    private func main(_ block: @escaping () -> Void) { DispatchQueue.main.async(execute: block) }
+}
