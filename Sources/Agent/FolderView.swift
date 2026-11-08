@@ -8,9 +8,13 @@ struct FolderApp: Identifiable, Equatable {
     let name: String
     let icon: NSImage
     var isRunning: Bool
+    /// A preview of where an app being dragged from the Dock will land (drawn faintly).
+    var isPreview = false
     var id: String { url.path }
 
-    static func == (a: FolderApp, b: FolderApp) -> Bool { a.url == b.url && a.isRunning == b.isRunning && a.name == b.name }
+    static func == (a: FolderApp, b: FolderApp) -> Bool {
+        a.url == b.url && a.isRunning == b.isRunning && a.name == b.name && a.isPreview == b.isPreview
+    }
 }
 
 final class FolderPanelModel: ObservableObject {
@@ -478,6 +482,11 @@ private struct AppCell: View {
             }
         }
         .frame(width: metrics.iconSize, height: metrics.cellHeight, alignment: .top)
+        // A dragged app's landing spot: faint, and not clickable.
+        .opacity(app.isPreview ? 0.45 : 1)
+        .scaleEffect(app.isPreview ? 0.9 : 1)
+        .allowsHitTesting(!app.isPreview)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: app.isPreview)
     }
 
     private var icon: some View {

@@ -83,6 +83,8 @@ final class DockDragCollector {
                 panel.show(folderID: id, item: nil)
                 panel.heldForDrop = true
                 panel.setDropTargeted(true)
+                // Show where it will land (sliding to that page if the others are full).
+                panel.previewDrop(of: self.dragged?.url)
                 self.startSpringGuard()
             case .app(let url):
                 guard let frame = self.currentFrame(of: over) else { return }
@@ -111,8 +113,13 @@ final class DockDragCollector {
 
         if let open, panel.folderID == open {
             let inPopup = panel.popupContains(cocoa(point))
-            guard inPopup || target(at: point) == .folder(open) else { return }
+            guard inPopup || target(at: point) == .folder(open) else {
+                panel.previewDrop(of: nil)   // let go elsewhere: the preview goes
+                return
+            }
+            // The preview becomes the app, in the same spot; the folder stays a moment to show it.
             FolderActions.dropFromDock(url, into: open, releasedOnDock: !inPopup)
+            panel.showDropLanded()
         } else if let armed, target(at: point) == .app(armed) {
             FolderActions.combineInDock(dragged: url, onto: armed)
         }

@@ -82,6 +82,8 @@ final class FolderPanelController: NSObject {
 
     /// Sprung open by an app dragged from the Dock: stays open until that drag ends.
     var heldForDrop = false
+    /// After an app was dropped in: stays open (and holds the Dock) a moment so you see it land.
+    private var showLandedUntil = Date.distantPast
 
     private override init() {
         super.init()
@@ -282,7 +284,7 @@ final class FolderPanelController: NSObject {
         let level: NSWindow.Level = overDock && !onTile && !inMenu ? Self.belowDockLabels : .popUpMenu
         if panel.level != level { panel.level = level }
 
-        let dragging = model.dragging != nil || heldForDrop
+        let dragging = model.dragging != nil || heldForDrop || Date() < showLandedUntil
         if model.dragging != nil { checkEdgeDwell() }
         updateMagnification(inside: inPopup && !menus && !dragging, mouse: mouse)
 
@@ -566,6 +568,40 @@ final class FolderPanelController: NSObject {
     }
 
     // MARK: Drops from the Dock
+
+    /// While an app dragged from the Dock is over this folder: shows it faintly where it will land
+    /// (after the folder's other apps) and slides to that page. `nil` takes the preview away.
+    func previewDrop(of url: URL?) {
+        guard isOpen, let folderID, let folder = FolderStore.shared.folder(id: folderID) else { return }
+        var apps = Self.apps(in: folder)
+        if let url, !folder.apps.contains(url.path), FileManager.default.fileExists(atPath: url.path) {
+            apps.append(FolderApp(url: url, name: Self.displayName(of: url),
+                                  icon: NSWorkspace.shared.icon(forFile: url.path), isRunning: false, isPreview: true))
+        }
+        let m = metrics(for: apps.count, folderName: folder.name)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+            model.metrics = m
+            model.apps = apps
+        }
+        position()
+        let target: Int
+        if let url, let index = apps.firstIndex(where: { $0.url.path == url.path }) {
+            target = index / m.perPage
+        } else {
+            target = min(model.page, m.pages - 1)
+        }
+        guard target != model.page else { return }
+        // A beat after it opens, so you see it slide over.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, self.isOpen else { return }
+            self.go(toPage: target)
+        }
+    }
+
+    /// An app was just dropped in: stay open a moment so you see it in its spot.
+    func showDropLanded() {
+        showLandedUntil = Date().addingTimeInterval(1.3)
+    }
 
     /// Whether a point (Cocoa screen coordinates) is on the open popup.
     func popupContains(_ point: CGPoint) -> Bool {

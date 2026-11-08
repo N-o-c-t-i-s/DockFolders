@@ -51,6 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // dockfolders://create?path=/Applications/A.app&path=… (handy for scripting)
             #if DFTEST
             // Test builds only (DF_SWIFT_FLAGS="-D DFTEST"): runs Create Folder on two Dock apps.
+            if url.host == "test-preview", let id = items.first(where: { $0.name == "id" })?.value,
+               let path = items.first(where: { $0.name == "path" })?.value {
+                FolderPanelController.shared.show(folderID: id, item: nil)
+                FolderPanelController.shared.previewDrop(of: URL(fileURLWithPath: path))
+                continue
+            }
             if url.host == "test-combine" {
                 let paths = items.filter { $0.name == "path" }.compactMap(\.value)
                 if paths.count == 2 {
