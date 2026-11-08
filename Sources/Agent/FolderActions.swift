@@ -92,24 +92,32 @@ enum FolderActions {
         }
     }
 
-    /// An app dragged off the Dock onto a folder's drop target: the Dock takes its tile out (with
-    /// its poof, like any app dragged off), and the app goes into the folder.
-    static func dropFromDock(_ url: URL, into folderID: String) {
+    /// An app dragged from the Dock onto a folder: it goes into the folder, and its tile leaves the
+    /// Dock as quickly as possible.
+    static func dropFromDock(_ url: URL, into folderID: String, releasedOnDock: Bool) {
         DockPrefs.noteLiveRemoval(url)
         add([url], to: folderID, removeFromDock: false)
-        let running = NSWorkspace.shared.runningApplications.contains {
-            $0.bundleURL?.standardizedFileURL.path == url.standardizedFileURL.path
-        }
-        // Let go too close to the Dock, it puts the tile back instead: take it out ourselves.
-        if running {
-            // A running app's tile stays either way; it only needs to stop being kept.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                if DockPrefs.savedContains(url) { DockLive.unpinApp(at: url) }
-            }
+        if releasedOnDock {
+            // Let go on the Dock itself: the Dock has just set the tile down beside the folder. Take
+            // it out the moment its menu answers (a running app just stops being kept).
+            removeWhenSettled(url, attempts: 5)
         } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            // Let go above the Dock: the Dock removes the tile itself, as for any app dragged off.
+            // If it was let go too close and the Dock kept it, take it out.
+            let running = NSWorkspace.shared.runningApplications.contains {
+                $0.bundleURL?.standardizedFileURL.path == url.standardizedFileURL.path
+            }
+            guard !running else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 if DockAX.shared.item(for: url) != nil { DockLive.unpinApp(at: url) }
             }
+        }
+    }
+
+    private static func removeWhenSettled(_ url: URL, attempts: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            if DockLive.unpinApp(at: url) || attempts <= 1 { return }
+            removeWhenSettled(url, attempts: attempts - 1)
         }
     }
 

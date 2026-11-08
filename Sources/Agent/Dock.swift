@@ -161,6 +161,11 @@ final class DockAX {
 
     /// Puts the Dock into its keyboard-focus state, which keeps an auto-hiding Dock on screen
     /// without changing the usable screen area (so no windows get resized).
+    ///
+    /// Something has to stay selected for that state to last, and the Dock marks it: a selected
+    /// tile is drawn dimmed with its name label showing. Selecting the folder's own tile puts that
+    /// label right where the popup covers it. (Selecting the divider instead leaves every icon
+    /// bright, but the Dock then re-shows the last label it drew above the divider, on its own.)
     @discardableResult
     func holdOpen(selecting item: DockItem?) -> Bool {
         guard let list else { return false }

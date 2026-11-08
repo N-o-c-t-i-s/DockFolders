@@ -21,7 +21,7 @@ final class DockDragCollector {
     /// The folder that sprang open for this drag.
     private var openFolderID: String?
 
-    private static let springDelay: TimeInterval = 0.35
+    private static let springDelay: TimeInterval = 0.18
 
     // MARK: Drag (from the event tap, on the main thread)
 
@@ -73,9 +73,10 @@ final class DockDragCollector {
             panel.heldForDrop = false
             panel.setDropTargeted(false)
         }
-        guard let url = dragged?.url, let open = openFolderID, panel.folderID == open,
-              panel.popupContains(cocoa(point)) || folder(at: point) == open else { return }
-        FolderActions.dropFromDock(url, into: open)
+        guard let url = dragged?.url, let open = openFolderID, panel.folderID == open else { return }
+        let inPopup = panel.popupContains(cocoa(point))
+        guard inPopup || folder(at: point) == open else { return }
+        FolderActions.dropFromDock(url, into: open, releasedOnDock: !inPopup)
     }
 
     // MARK: Where the folders are

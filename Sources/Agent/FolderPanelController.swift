@@ -136,6 +136,7 @@ final class FolderPanelController: NSObject {
 
         position()
         model.isPresented = false
+        panel.level = .popUpMenu
         panel.alphaValue = 1
         panel.orderFrontRegardless()
         DispatchQueue.main.async {
@@ -272,6 +273,13 @@ final class FolderPanelController: NSObject {
         // Between the Dock and the popup, across the popup's width: on the way in or out.
         let approach = approachZone().contains(mouse)
 
+        // The Dock draws its name labels in its own window, just below the popup. On the Dock over
+        // another app, drop below that window so the app's name shows on top of the popup; anywhere
+        // else (in the popup, a menu, or on the folder's own tile) stay above it, covering the
+        // folder's own label.
+        let level: NSWindow.Level = overDock && !onTile && !inMenu ? Self.belowDockLabels : .popUpMenu
+        if panel.level != level { panel.level = level }
+
         let dragging = model.dragging != nil || heldForDrop
         if model.dragging != nil { checkEdgeDwell() }
         updateMagnification(inside: inPopup && !menus && !dragging, mouse: mouse)
@@ -355,6 +363,9 @@ final class FolderPanelController: NSObject {
         case .right: return point.x >= barFrame.minX && point.y >= barFrame.minY && point.y <= barFrame.maxY
         }
     }
+
+    /// Just under the Dock's window (which holds its icons and name labels).
+    private static let belowDockLabels = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
 
     /// Whether a point just outside the popup is on its Dock side.
     private func towardDock(_ point: CGPoint) -> Bool {
