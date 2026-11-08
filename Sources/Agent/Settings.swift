@@ -36,18 +36,27 @@ final class SettingsModel: ObservableObject {
         objectWillChange.send()
     }
 
-    private var observer: NSObjectProtocol?
+    /// Folders whose new name hasn't reached the Dock yet, and whether anything else is waiting
+    /// for the Dock's next (unseen) restart.
+    @Published var renamesWaiting: Set<String> = []
+    @Published var dockChangesWaiting = false
+
+    private var observers: [NSObjectProtocol] = []
 
     init() {
         reload()
-        observer = NotificationCenter.default.addObserver(forName: FolderStore.didChange, object: nil, queue: .main) { [weak self] _ in
-            self?.reload()
+        for name in [FolderStore.didChange, DockSettle.didChange] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.reload()
+            })
         }
     }
 
     func reload() {
         folders = FolderStore.shared.folders
-        inDock = Set(folders.filter { DockPrefs.containsTile(for: $0.stubURL) || FolderActions.hasPendingRename($0.id) }.map(\.id))
+        inDock = Set(folders.filter { DockPrefs.containsTile(for: FolderActions.dockURL(for: $0)) }.map(\.id))
+        renamesWaiting = Set(folders.filter { FolderActions.hasPendingRename($0.id) }.map(\.id))
+        dockChangesWaiting = DockSettle.hasPending
         openAtLogin = SMAppService.mainApp.status == .enabled
         if usesDockIconSize { iconSize = Double(FolderPrefs.dockIconSize) }
         accessibilityAllowed = AXIsProcessTrusted()
@@ -263,6 +272,16 @@ private struct FolderDetailView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .transition(.opacity)
+                            } else if model.renamesWaiting.contains(folderID) {
+                                // The Dock only picks up names when it restarts; that happens unseen.
+                                HStack(spacing: 6) {
+                                    Text("The Dock shows this name after your Mac next locks or sleeps.")
+                                    Button("Update Now") { DockSettle.apply() }
+                                        .buttonStyle(.link)
+                                        .help("Restarts the Dock now (the screen flickers for a moment)")
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             } else {
                                 Text("Shown when you point at it in the Dock")
                                     .font(.caption)
@@ -290,6 +309,7 @@ private struct FolderDetailView: View {
                         }
                     }
                     .disabled(folder.apps.isEmpty)
+                    .accessibilityLabel("Show in Dock")
                 }
 
                 Section {
@@ -335,10 +355,8 @@ private struct FolderDetailView: View {
         guard let folder = model.folder(folderID), isEdited(folder) else { return }
         FolderActions.rename(folderID, to: name)
         editingName = false
-        savedNote = FolderActions.hasPendingRename(folderID)
-            ? "Saved — the Dock shows the new name when you close Settings"
-            : "Saved"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { savedNote = nil }
+        savedNote = "Saved"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { savedNote = nil }
     }
 }
 
@@ -452,6 +470,16 @@ private struct GeneralView: View {
 
     var body: some View {
         Form {
+            if model.dockChangesWaiting {
+                Section {
+                    LabeledContent {
+                        Button("Update Now") { DockSettle.apply() }
+                    } label: {
+                        Text("Dock changes waiting")
+                        Text("New names and positions reach the Dock when your Mac next locks or sleeps, so you never see it restart. Update Now restarts it right away.")
+                    }
+                }
+            }
             Section {
                 Toggle("Open at login", isOn: Binding(get: { model.openAtLogin }, set: { model.setOpenAtLogin($0) }))
                 LabeledContent("Accessibility") {
@@ -579,7 +607,5 @@ final class SettingsController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         window?.makeFirstResponder(nil)   // saves a name still being edited
-        // Name changes reach the Dock now, in one go (the Dock only reads names when it starts).
-        DispatchQueue.main.async { FolderActions.applyPendingRenames() }
     }
 }

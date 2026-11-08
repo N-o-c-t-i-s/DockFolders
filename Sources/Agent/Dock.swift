@@ -281,14 +281,66 @@ enum DockPrefs {
         return nil
     }
 
+    // Changes made live, through the Dock's menus, that it hasn't saved yet (it writes its
+    // settings a few seconds later). Until it does, they count as done.
+    private static var livePinned: [String: [String: Any]] = [:]
+    private static var liveRemoved: Set<String> = []
+
+    static func noteLivePin(_ url: URL, tile: [String: Any]) {
+        let target = normalized(url)
+        liveRemoved.remove(target)
+        livePinned[target] = tile
+    }
+
+    static func noteLiveRemoval(_ url: URL) {
+        let target = normalized(url)
+        livePinned.removeValue(forKey: target)
+        liveRemoved.insert(target)
+    }
+
     static func containsTile(for url: URL) -> Bool {
-        readApps().contains { path(of: $0) == normalized(url) }
+        let target = normalized(url)
+        let saved = readApps().contains { path(of: $0) == target }
+        if livePinned[target] != nil {
+            if saved { livePinned.removeValue(forKey: target) }
+            return true
+        }
+        if liveRemoved.contains(target) {
+            if !saved { liveRemoved.remove(target) }
+            return false
+        }
+        return saved
+    }
+
+    /// What the Dock has actually saved (ignoring live changes it hasn't written yet).
+    static func savedContains(_ url: URL) -> Bool {
+        let target = normalized(url)
+        return readApps().contains { path(of: $0) == target }
+    }
+
+    /// Where a tile sits among the Dock's apps (counting live changes).
+    static func index(of url: URL) -> Int? {
+        var apps = readApps()
+        reconcileLive(&apps)
+        return index(of: url, in: apps)
+    }
+
+    /// Brings saved settings up to date with live changes the Dock hasn't written yet, so a
+    /// restart doesn't undo them.
+    private static func reconcileLive(_ apps: inout [[String: Any]]) {
+        apps.removeAll { tile in path(of: tile).map(liveRemoved.contains) ?? false }
+        for (target, tile) in livePinned where !apps.contains(where: { path(of: $0) == target }) {
+            apps.append(tile)
+        }
     }
 
     /// Applies a change to the Dock's app list and restarts the Dock so it takes effect.
     static func modify(restartWhenHidden: Bool = false, then completion: (() -> Void)? = nil,
                        _ change: (inout [[String: Any]]) -> Void) {
         var apps = readApps()
+        reconcileLive(&apps)
+        livePinned.removeAll()
+        liveRemoved.removeAll()
         change(&apps)
         writeApps(apps)
         if restartWhenHidden {

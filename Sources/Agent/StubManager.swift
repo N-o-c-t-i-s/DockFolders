@@ -74,12 +74,25 @@ enum StubManager {
     /// Launches the stub once, invisibly. Until an app has been launched, macOS doesn't trust it
     /// "for binding" and the Dock refuses to load its tile plug-in.
     private static func registerWithSystem(_ stubURL: URL) {
+        let path = stubURL.standardizedFileURL.resolvingSymlinksInPath().path
+        registering.insert(path)
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
         config.addsToRecentItems = false
         config.createsNewApplicationInstance = true
         config.arguments = ["--register"]
-        NSWorkspace.shared.openApplication(at: stubURL, configuration: config) { _, _ in }
+        NSWorkspace.shared.openApplication(at: stubURL, configuration: config) { app, _ in
+            DispatchQueue.main.async { waitUntilQuit(app, path: path, deadline: Date().addingTimeInterval(5)) }
+        }
+    }
+
+    /// Stubs on their one-time registration run (they quit straight away). Launching one again
+    /// before it's gone would just hand back that quitting instance.
+    static var registering = Set<String>()
+
+    private static func waitUntilQuit(_ app: NSRunningApplication?, path: String, deadline: Date) {
+        guard let app, !app.isTerminated, Date() < deadline else { registering.remove(path); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { waitUntilQuit(app, path: path, deadline: deadline) }
     }
 
     static func remove(_ folder: Folder) {
@@ -106,7 +119,11 @@ enum StubManager {
 
     /// The Dock only draws its running dot for running apps, so while any app in the folder is
     /// running, the folder's own stub runs too (--indicator) and the Dock shows the real dot.
+    /// Folders whose stub is running to change the Dock (pinning or unpinning its tile).
+    static var busy = Set<String>()
+
     static func syncIndicator(_ folder: Folder, running: Bool) {
+        guard !busy.contains(folder.id) else { return }
         let instances = NSRunningApplication.runningApplications(withBundleIdentifier: folder.bundleIdentifier)
         // Only for folders that are in the Dock: otherwise the stub would show up as a loose app.
         if running, instances.isEmpty, FileManager.default.fileExists(atPath: folder.stubURL.path),

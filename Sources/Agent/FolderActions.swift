@@ -10,6 +10,9 @@ enum FolderActions {
     /// New folders start out called "Folder"; you can name them in Settings.
     static let folderName = "Folder"
 
+    /// A new folder in the app's place: the folder joins the Dock (silently) and the app's tile
+    /// leaves it. The folder lands at the end of the Dock's apps, and moves into the app's old
+    /// spot the next time the Dock restarts unseen (when the Mac locks or sleeps).
     static func newFolder(with appURL: URL) {
         let folder = store.create(name: folderName, apps: [appURL])
         do {
@@ -20,13 +23,16 @@ enum FolderActions {
             return
         }
         EventInterceptor.shared.update(folders: store.folders)
-        DockPrefs.modify { apps in
-            let tile = DockPrefs.folderTile(folder)
-            if let index = DockPrefs.index(of: appURL, in: apps) { apps[index] = tile } else { apps.append(tile) }
+        FolderPanelController.shared.close()
+        let spot = DockPrefs.index(of: appURL)
+        showInDock(folder) { _ in
+            takeOutOfDock([appURL]) {
+                if let spot { DockSettle.place(folder.id, at: spot) }
+            }
         }
     }
 
-    /// Creates a folder and adds its tile to the end of the Dock's app section.
+    /// Creates a folder and adds its tile to the end of the Dock's apps.
     static func createFolder(apps: [URL]) {
         let folder = store.create(name: folderName, apps: apps.filter { $0.pathExtension == "app" })
         do {
@@ -37,7 +43,7 @@ enum FolderActions {
             return
         }
         EventInterceptor.shared.update(folders: store.folders)
-        DockPrefs.modify { $0.append(DockPrefs.folderTile(folder)) }
+        if !folder.apps.isEmpty { showInDock(folder) }
     }
 
     /// Re-adds folders whose tiles were dragged out of the Dock (their contents were kept).
@@ -45,13 +51,75 @@ enum FolderActions {
         // Only folders with something in them belong in the Dock.
         let folders = folderIDs.compactMap(store.folder(id:))
             .filter { !$0.apps.isEmpty && !DockPrefs.containsTile(for: dockURL(for: $0)) }
-        guard !folders.isEmpty else { return }
-        for folder in folders where !FileManager.default.fileExists(atPath: folder.stubURL.path) {
-            try? StubManager.install(folder)
+        func next(_ rest: ArraySlice<Folder>) {
+            guard let folder = rest.first else { return }
+            showInDock(folder) { _ in next(rest.dropFirst()) }
         }
-        DockPrefs.modify { tiles in
-            tiles.append(contentsOf: folders.map(DockPrefs.folderTile))
+        next(folders[...])
+    }
+
+    // MARK: The Dock, live
+
+    /// Puts a folder's tile in the Dock with no restart and no sound (see DockLive). If the Dock
+    /// doesn't play along, falls back to a restart.
+    private static func showInDock(_ folder: Folder, completion: @escaping (Bool) -> Void = { _ in }) {
+        if !FileManager.default.fileExists(atPath: folder.stubURL.path) { try? StubManager.install(folder) }
+        DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
+        NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+        DockLive.pinFolder(folder) { ok in
+            if !ok { DockPrefs.modify { _ in } }
+            EventInterceptor.shared.update(folders: store.folders)
+            NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+            completion(ok)
         }
+    }
+
+    /// Takes a folder's tile out of the Dock with no restart and no poof (see DockLive).
+    private static func hideFromDock(_ folder: Folder, completion: @escaping () -> Void = {}) {
+        let tileURL = dockURL(for: folder)
+        // The tile is going, so a name still waiting to reach it doesn't matter any more.
+        let oldStub = pendingRenames.removeValue(forKey: folder.id)
+        FolderPanelController.shared.close()
+        DockPrefs.noteLiveRemoval(tileURL)
+        DockSettle.forget(folder.id)
+        NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+        DockLive.unpinFolder(folder, tileURL: tileURL) { ok in
+            if !ok { DockPrefs.modify { _ in } }
+            if let oldStub, oldStub.path != folder.stubURL.path { removeStub(at: oldStub) }
+            EventInterceptor.shared.update(folders: store.folders)
+            NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+            completion()
+        }
+    }
+
+    /// An app dragged off the Dock onto a folder's drop target: the Dock takes its tile out (with
+    /// its poof, like any app dragged off), and the app goes into the folder.
+    static func dropFromDock(_ url: URL, into folderID: String) {
+        DockPrefs.noteLiveRemoval(url)
+        add([url], to: folderID, removeFromDock: false)
+        let running = NSWorkspace.shared.runningApplications.contains {
+            $0.bundleURL?.standardizedFileURL.path == url.standardizedFileURL.path
+        }
+        // Let go too close to the Dock, it puts the tile back instead: take it out ourselves.
+        if running {
+            // A running app's tile stays either way; it only needs to stop being kept.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if DockPrefs.savedContains(url) { DockLive.unpinApp(at: url) }
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                if DockAX.shared.item(for: url) != nil { DockLive.unpinApp(at: url) }
+            }
+        }
+    }
+
+    /// Takes apps' tiles out of the Dock, one after another (each with the Dock's poof, unless the
+    /// app is running: then it just stops being kept).
+    private static func takeOutOfDock(_ urls: [URL], completion: @escaping () -> Void = {}) {
+        guard let url = urls.first else { completion(); return }
+        DockPrefs.noteLiveRemoval(url)
+        if !DockLive.unpinApp(at: url) { DockPrefs.modify { _ in } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { takeOutOfDock(Array(urls.dropFirst()), completion: completion) }
     }
 
     // MARK: Adding / removing apps
@@ -69,12 +137,8 @@ enum FolderActions {
         let leavingDock = removeFromDock ? apps.filter(DockPrefs.containsTile(for:)) : []
         guard joinDock || !leavingDock.isEmpty else { return }
         FolderPanelController.shared.close()
-        if joinDock, !FileManager.default.fileExists(atPath: folder.stubURL.path) { try? StubManager.install(folder) }
-        DockPrefs.modify { tiles in
-            for url in leavingDock {
-                if let index = DockPrefs.index(of: url, in: tiles) { tiles.remove(at: index) }
-            }
-            if joinDock { tiles.append(DockPrefs.folderTile(folder)) }
+        takeOutOfDock(leavingDock) {
+            if joinDock { showInDock(folder) }
         }
     }
 
@@ -107,34 +171,31 @@ enum FolderActions {
         guard let folder = store.update(folderID, { $0.apps.removeAll { $0 == url.path } }) else { return }
         StubManager.refreshTile(folder)
         FolderPanelController.shared.close()
-        let tileURL = dockURL(for: folder)
-        let addApp = !DockPrefs.containsTile(for: url)
-        // Its last app: the app takes the folder's place in the Dock.
-        let emptied = folder.apps.isEmpty && DockPrefs.containsTile(for: tileURL)
-        guard addApp || emptied else { return }
-        if emptied { StubManager.stopIndicator(folder) }
-        let oldStub = emptied ? pendingRenames.removeValue(forKey: folderID) : nil
-        DockPrefs.modify(then: {
-            if let oldStub, oldStub.path != folder.stubURL.path { removeStub(at: oldStub) }
-        }) { tiles in
-            if addApp {
-                let tile = DockPrefs.appTile(for: url)
-                if let index = DockPrefs.index(of: tileURL, in: tiles) { tiles.insert(tile, at: index + 1) } else { tiles.append(tile) }
+        if !DockPrefs.containsTile(for: url) {
+            let running = NSWorkspace.shared.runningApplications.contains {
+                $0.bundleURL?.standardizedFileURL.path == url.standardizedFileURL.path
             }
-            if emptied, let index = DockPrefs.index(of: tileURL, in: tiles) { tiles.remove(at: index) }
+            if running {
+                // Its tile is already showing; just keep it (silent).
+                DockPrefs.noteLivePin(url, tile: DockPrefs.appTile(for: url))
+                if !DockLive.pinRunningApp(at: url) { DockPrefs.modify { _ in } }
+            } else {
+                // Only a restart can add a tile for an app that isn't open: save it for a quiet moment.
+                DockSettle.addApp(url, near: folderID)
+            }
         }
+        // Its last app: the folder leaves the Dock.
+        if folder.apps.isEmpty, DockPrefs.containsTile(for: dockURL(for: folder)) { hideFromDock(folder) }
     }
 
     /// Empty folders have nothing to show, so they're kept out of the Dock.
     static func removeEmptyFoldersFromDock() {
         let empty = store.folders.filter { $0.apps.isEmpty && DockPrefs.containsTile(for: dockURL(for: $0)) }
-        guard !empty.isEmpty else { return }
-        empty.forEach(StubManager.stopIndicator)
-        DockPrefs.modify { tiles in
-            for folder in empty {
-                if let index = DockPrefs.index(of: dockURL(for: folder), in: tiles) { tiles.remove(at: index) }
-            }
+        func next(_ rest: ArraySlice<Folder>) {
+            guard let folder = rest.first else { return }
+            hideFromDock(folder) { next(rest.dropFirst()) }
         }
+        next(empty[...])
     }
 
     // MARK: Folder-level
@@ -142,11 +203,24 @@ enum FolderActions {
     // MARK: Renaming (from Settings)
 
     /// Renames waiting to reach the Dock: folder id → the stub its Dock tile still points at.
-    /// The Dock only reads names when it starts, so they're applied together, in one restart,
-    /// when Settings closes.
+    /// The Dock only reads names when it starts, so they go out with the next unseen restart
+    /// (see DockSettle), or straight away with Update Now.
     private static var pendingRenames: [String: URL] = [:]
 
     static func hasPendingRename(_ folderID: String) -> Bool { pendingRenames[folderID] != nil }
+    static var hasPendingRenames: Bool { !pendingRenames.isEmpty }
+
+    /// Hands the waiting renames to DockSettle, which writes them into the Dock.
+    static func takePendingRenames() -> [String: URL] {
+        defer { pendingRenames.removeAll() }
+        return pendingRenames
+    }
+
+    /// After a rename reached the Dock: the old stubs can go.
+    static func finishRenames(_ renames: [String: URL]) {
+        let currentStubs = Set(store.folders.map { $0.stubURL.path })
+        for old in renames.values where !currentStubs.contains(old.path) { removeStub(at: old) }
+    }
 
     /// The stub the folder's Dock tile currently points at.
     static func dockURL(for folder: Folder) -> URL { pendingRenames[folder.id] ?? folder.stubURL }
@@ -183,10 +257,11 @@ enum FolderActions {
         EventInterceptor.shared.update(folders: store.folders)
         FolderPanelController.shared.close()
         NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+        DockSettle.changed()
     }
 
-    /// Picks up renames that never reached the Dock (Dock Folders quit before Settings closed):
-    /// the tile still points at the folder's old stub, so send the new name now.
+    /// Picks up renames that hadn't reached the Dock when Dock Folders last quit: the tile still
+    /// points at the folder's old stub. They go out with the next unseen restart.
     static func recoverPendingRenames() {
         for folder in store.folders where pendingRenames[folder.id] == nil {
             guard !DockPrefs.containsTile(for: folder.stubURL),
@@ -197,24 +272,7 @@ enum FolderActions {
         }
         guard !pendingRenames.isEmpty else { return }
         EventInterceptor.shared.update(folders: store.folders)
-        applyPendingRenames()
-    }
-
-    /// Sends pending names to the Dock (one restart, once the Dock has slid out of sight).
-    static func applyPendingRenames() {
-        guard !pendingRenames.isEmpty else { return }
-        let changes = pendingRenames
-        pendingRenames.removeAll()
-        let currentStubs = Set(store.folders.map { $0.stubURL.path })
-        DockPrefs.modify(restartWhenHidden: true, then: {
-            for old in changes.values where !currentStubs.contains(old.path) { removeStub(at: old) }
-            EventInterceptor.shared.update(folders: store.folders)
-        }) { tiles in
-            for (id, old) in changes {
-                guard let folder = store.folder(id: id), let index = DockPrefs.index(of: old, in: tiles) else { continue }
-                tiles[index] = DockPrefs.folderTile(folder)
-            }
-        }
+        DockSettle.changed()
     }
 
     private static func removeStub(at url: URL) {
@@ -224,36 +282,25 @@ enum FolderActions {
 
     /// Takes a folder's tile out of the Dock but keeps the folder (it can be put back from Settings).
     static func removeFromDock(_ folderID: String) {
-        guard let folder = store.folder(id: folderID) else { return }
-        let tileURL = dockURL(for: folder)
-        guard DockPrefs.containsTile(for: tileURL) else { return }
-        FolderPanelController.shared.close()
-        StubManager.stopIndicator(folder)
-        if let old = pendingRenames.removeValue(forKey: folderID), old.path != folder.stubURL.path {
-            DockPrefs.modify(then: { removeStub(at: old) }) { tiles in
-                if let index = DockPrefs.index(of: tileURL, in: tiles) { tiles.remove(at: index) }
-            }
-            return
-        }
-        DockPrefs.modify { tiles in
-            if let index = DockPrefs.index(of: tileURL, in: tiles) { tiles.remove(at: index) }
-        }
+        guard let folder = store.folder(id: folderID), DockPrefs.containsTile(for: dockURL(for: folder)) else { return }
+        hideFromDock(folder)
     }
 
-    /// Deletes a folder entirely (its apps stay installed).
+    /// Deletes a folder entirely (its apps stay installed). It's gone from Settings at once; its
+    /// tile slides out of the Dock a moment later.
     static func delete(_ folderID: String) {
         guard let folder = store.folder(id: folderID) else { return }
         FolderPanelController.shared.close()
-        let tileURL = dockURL(for: folder)
-        let old = pendingRenames.removeValue(forKey: folderID)
-        if DockPrefs.containsTile(for: tileURL) {
-            DockPrefs.modify { tiles in
-                if let index = DockPrefs.index(of: tileURL, in: tiles) { tiles.remove(at: index) }
-            }
-        }
-        if let old, old.path != folder.stubURL.path { removeStub(at: old) }
-        StubManager.remove(folder)
+        let inDock = DockPrefs.containsTile(for: dockURL(for: folder))
         store.delete(folderID)
+        EventInterceptor.shared.update(folders: store.folders)
+        if inDock {
+            hideFromDock(folder) { StubManager.remove(folder) }
+        } else {
+            if let old = pendingRenames.removeValue(forKey: folderID), old.path != folder.stubURL.path { removeStub(at: old) }
+            DockSettle.forget(folderID)
+            StubManager.remove(folder)
+        }
     }
 
     /// Sets a folder's app order (from Settings); the Dock icon's 2×2 preview follows.
@@ -294,38 +341,6 @@ enum FolderActions {
         }
         EventInterceptor.shared.update(folders: store.folders)
         return folder.id
-    }
-
-    /// Puts the folder's apps back in the Dock where the folder was, then deletes the folder.
-    static func ungroup(_ folderID: String) {
-        guard let folder = store.folder(id: folderID) else { return }
-        FolderPanelController.shared.close()
-        DockPrefs.modify { tiles in
-            let appTiles = folder.appURLs
-                .filter { FileManager.default.fileExists(atPath: $0.path) && DockPrefs.index(of: $0, in: tiles) == nil }
-                .map(DockPrefs.appTile(for:))
-            if let index = DockPrefs.index(of: folder.stubURL, in: tiles) {
-                tiles.replaceSubrange(index...index, with: appTiles)
-            } else {
-                tiles.append(contentsOf: appTiles)
-            }
-        }
-        StubManager.remove(folder)
-        store.delete(folderID)
-    }
-
-    static func remove(_ folderID: String) {
-        guard let folder = store.folder(id: folderID),
-              Prompt.confirm(title: "Remove “\(folder.name)” from the Dock?",
-                             message: "The apps inside stay installed. Only the folder is removed.",
-                             confirm: "Remove Folder",
-                             icon: NSImage(contentsOf: DFShared.tileImageURL(for: folderID))) else { return }
-        FolderPanelController.shared.close()
-        DockPrefs.modify { tiles in
-            if let index = DockPrefs.index(of: folder.stubURL, in: tiles) { tiles.remove(at: index) }
-        }
-        StubManager.remove(folder)
-        store.delete(folderID)
     }
 
     // MARK: Helpers

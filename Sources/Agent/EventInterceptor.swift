@@ -6,6 +6,7 @@ import AppKit
 /// • Drag a folder tile       → replayed to the Dock, so tiles can still be rearranged.
 /// • Right-click a folder     → our folder menu.
 /// • ⇧ right-click any app    → "New Folder" / "Add to Folder" menu.
+/// • Drag an app off the Dock → watched (not changed), so folders can show drop targets.
 /// • Click anywhere else while a popup is open → close it.
 final class EventInterceptor {
     static let shared = EventInterceptor()
@@ -16,6 +17,10 @@ final class EventInterceptor {
     var onDockAppMenu: ((DockItem) -> Void)?
     var onOutsideClick: (() -> Void)?
     var onMenuOutsideClick: (() -> Void)?
+    /// Dragging an app's tile (the Dock does the dragging; we only watch). Points are global, top-left origin.
+    var onAppDragBegan: ((DockItem) -> Void)?
+    var onAppDragMoved: ((CGPoint) -> Void)?
+    var onAppDragEnded: ((CGPoint) -> Void)?
 
     private let replayMarker: Int64 = 0x44_46_4F_4C // "DFOL"
     private var tap: CFMachPort?
@@ -31,6 +36,7 @@ final class EventInterceptor {
     private var pending: (event: CGEvent, folderID: String, item: DockItem, start: CGPoint)?
     private var swallowLeftUp = false
     private var swallowRightUp = false
+    private var appDrag: (item: DockItem, start: CGPoint, active: Bool)?
 
     var isRunning: Bool { tap != nil }
 
@@ -118,14 +124,18 @@ final class EventInterceptor {
 
         switch type {
         case .leftMouseDown:
-            if let (id, item) = folderHit(at: location) {
-                if event.flags.contains(.maskControl) {          // control-click = right-click
-                    swallowLeftUp = true
-                    main { self.onFolderMenu?(id, item) }
-                } else if let copy = event.copy() {
-                    pending = (copy, id, item, location)
+            appDrag = nil
+            if nearDockEdge(location), let item = DockAX.shared.item(at: location) {
+                if let id = folderID(for: item) {
+                    if event.flags.contains(.maskControl) {          // control-click = right-click
+                        swallowLeftUp = true
+                        main { self.onFolderMenu?(id, item) }
+                    } else if let copy = event.copy() {
+                        pending = (copy, id, item, location)
+                    }
+                    return nil
                 }
-                return nil
+                if isPlainApp(item) { appDrag = (item, location, false) }
             }
             if panel != nil { main { self.onOutsideClick?() } }
 
@@ -143,8 +153,21 @@ final class EventInterceptor {
                 }
                 return nil
             }
+            if var drag = appDrag {
+                if !drag.active, hypot(location.x - drag.start.x, location.y - drag.start.y) > 5 {
+                    drag.active = true
+                    appDrag = drag
+                    let item = drag.item
+                    main { self.onAppDragBegan?(item) }
+                }
+                if drag.active { main { self.onAppDragMoved?(location) } }
+            }
 
         case .leftMouseUp:
+            if let drag = appDrag {
+                appDrag = nil
+                if drag.active { main { self.onAppDragEnded?(location) } }
+            }
             if let p = pending {
                 pending = nil
                 main { self.onFolderClick?(p.folderID, p.item) }
@@ -188,19 +211,27 @@ final class EventInterceptor {
     }
 
     private func folderHit(at p: CGPoint) -> (String, DockItem)? {
-        guard nearDockEdge(p), let item = DockAX.shared.item(at: p), let url = item.url else { return nil }
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-        guard let id = lock.withLock({ stubPaths[path] }) else { return nil }
+        guard nearDockEdge(p), let item = DockAX.shared.item(at: p), let id = folderID(for: item) else { return nil }
         return (id, item)
     }
 
+    private func folderID(for item: DockItem) -> String? {
+        guard let url = item.url else { return nil }
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        return lock.withLock { stubPaths[path] }
+    }
+
     private func appHit(at p: CGPoint) -> DockItem? {
-        guard nearDockEdge(p), let item = DockAX.shared.item(at: p),
-              item.subrole == "AXApplicationDockItem", let url = item.url, url.pathExtension == "app" else { return nil }
-        let bundleID = Bundle(url: url)?.bundleIdentifier
-        if bundleID == "com.apple.finder" || bundleID == "com.apple.apps.launcher" { return nil }
-        if lock.withLock({ stubPaths[url.standardizedFileURL.resolvingSymlinksInPath().path] }) != nil { return nil }
+        guard nearDockEdge(p), let item = DockAX.shared.item(at: p), isPlainApp(item) else { return nil }
         return item
+    }
+
+    /// An ordinary app's tile (not a folder, Finder, the Apps launcher, a stack or the Trash).
+    private func isPlainApp(_ item: DockItem) -> Bool {
+        guard item.subrole == "AXApplicationDockItem", let url = item.url, url.pathExtension == "app" else { return false }
+        let bundleID = Bundle(url: url)?.bundleIdentifier
+        if bundleID == "com.apple.finder" || bundleID == "com.apple.apps.launcher" { return false }
+        return folderID(for: item) == nil
     }
 
     private func main(_ block: @escaping () -> Void) { DispatchQueue.main.async(execute: block) }

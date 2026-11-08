@@ -21,7 +21,7 @@ Settings or Activity Monitor.
 | To | Do this |
 | --- | --- |
 | Make a folder | ⇧ Shift-right-click any app in the Dock → **New Folder with “App”…** (the app moves into it) |
-| Move a Dock app into a folder | ⇧ Shift-right-click the app → **Move “App” to Folder ▸** |
+| Move a Dock app into a folder | Drag it up out of the Dock and let go on the folder's target, or ⇧ Shift-right-click it → **Move “App” to Folder ▸** |
 | Add any app | Drag it from Finder or the Apps window onto the folder in the Dock, or use **+** above the app list in Settings |
 | Open / close a folder | Click it. Move away from it, click outside, press Esc, or launch an app to close it |
 | Turn pages | Two-finger swipe, or click the dots |
@@ -71,10 +71,21 @@ No screen capturing and no Dock code injection; everything uses system mechanism
 - **Empty folders stay out of the Dock.** A new folder joins the Dock when its first app is added,
   and leaves it if its last app is removed (unless you turned **Show in Dock** off, which is
   remembered).
-- **Renaming** (in Settings: type the name, then **Save** or Return). The Dock only shows a tile's
-  new name after it restarts, so all renames go out together, in one restart, when Settings closes,
-  and that restart waits until an auto-hiding Dock has slid out of sight. If Dock Folders quits
-  first, it finishes the job the next time it starts.
+- **Changing the Dock without restarting it.** Restarting the Dock redraws the wallpaper and the
+  menu bar, so Dock Folders avoids it. It changes the Dock through the Dock's own right-click menu
+  instead (**Options ▸ Keep in Dock / Remove from Dock**, pressed through Accessibility, in the
+  Mac's language); the menu shows for a moment. Folder tiles come and go silently: the folder's
+  little app runs for a moment, so its tile is an ordinary running app's, which can be kept or let
+  go without the Dock's "poof". An app's own tile leaving the Dock gets the Dock's usual poof.
+  New folders appear at the end of the Dock's apps.
+- **Dragging an app into a folder.** While you drag an app up out of the Dock, each folder shows a
+  small glass target above it. Let go on one: the Dock takes the tile out (as for any app dragged
+  off) and the app goes into that folder. Dock Folders only watches the drag; the Dock does it.
+- **Saved for a quiet moment.** A few changes still need a restart: new names (the Dock only reads
+  names when it starts), moving a new folder into the spot of the app it was made from, and putting
+  an app that isn't running back in the Dock. They wait until your Mac locks or its display sleeps,
+  so you never see the restart; **Update Now** in Settings does it straight away. If Dock Folders
+  quits first, it picks pending names up again from the Dock.
 - **Glass finish.** System glass alone renders softer and lighter than the Dock's, so the popup,
   labels and menus add the Dock's crisp 1 pt rim (brightest along the top) and, in Dark Mode, its
   deeper tone.
@@ -85,9 +96,11 @@ No screen capturing and no Dock code injection; everything uses system mechanism
 
 - Apple doesn't let other apps add items to the Dock's own right-click menu (it would need
   SIP disabled). That's why creating a folder is ⇧ Shift-right-click.
-- Adding or removing Dock tiles (new folder, rename, moving apps in or out of the Dock) restarts
-  the Dock once, the same way `dockutil` does.
-- Running apps still appear in the Dock's running-apps section; macOS shows every running app there.
+- Running apps still appear in the Dock's running-apps section; macOS shows every running app
+  there, and only the app itself (or code running inside the Dock, which needs SIP disabled) can
+  change that.
+- Apple's own call for adding items to the Dock (`CoreDockAddFileToDock`) is reserved for Finder and
+  Safari, so live changes go through the Dock's menu instead, which shows for a moment.
 - The Dock draws its running dots only for running apps, so a folder's dot is drawn inside the
   folder's own icon, a few points higher than the Dock's other dots.
 - App-specific Dock menu items (e.g. Music's playback controls) aren't available to other apps,

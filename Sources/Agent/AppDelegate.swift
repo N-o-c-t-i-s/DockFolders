@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wireInterceptor()
         reconcileStubs()
         observeSystem()
+        DockSettle.startObserving()
         // After any Dock restart from reconciling has settled.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.refreshRunningDots() }
         registerLoginItem()
@@ -103,6 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DockMenus.show(DockMenus.appEntries(appURL: url), at: item)
         }
         interceptor.onOutsideClick = { FolderPanelController.shared.close() }
+        interceptor.onAppDragBegan = { DropTargetController.shared.began($0) }
+        interceptor.onAppDragMoved = { DropTargetController.shared.moved(to: $0) }
+        interceptor.onAppDragEnded = { DropTargetController.shared.ended(at: $0) }
         interceptor.onMenuOutsideClick = { GlassMenuController.shared.closeAll() }
 
         store.onChange = { [weak self] _ in
