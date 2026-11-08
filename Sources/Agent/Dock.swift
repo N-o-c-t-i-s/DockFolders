@@ -303,6 +303,13 @@ enum DockPrefs {
         liveRemoved.insert(target)
     }
 
+    /// Drops a live change that didn't happen after all.
+    static func forgetLive(_ url: URL) {
+        let target = normalized(url)
+        livePinned.removeValue(forKey: target)
+        liveRemoved.remove(target)
+    }
+
     static func containsTile(for url: URL) -> Bool {
         let target = normalized(url)
         let saved = readApps().contains { path(of: $0) == target }

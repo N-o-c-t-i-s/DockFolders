@@ -11,9 +11,8 @@ enum FolderActions {
     /// the apps don't say; you can rename them in Settings.
     static let folderName = "Folder"
 
-    /// A new folder in the app's place: the folder joins the Dock (silently) and the app's tile
-    /// leaves it. The folder lands at the end of the Dock's apps, and moves into the app's old
-    /// spot the next time the Dock restarts unseen (when the Mac locks or sleeps).
+    /// A new folder for an app: the folder joins the Dock (silently, at the end of its apps) and
+    /// the app's tile leaves it.
     static func newFolder(with appURL: URL) {
         let folder = store.create(name: FolderNaming.name(for: [appURL]), apps: [appURL])
         do {
@@ -25,12 +24,7 @@ enum FolderActions {
         }
         EventInterceptor.shared.update(folders: store.folders)
         FolderPanelController.shared.close()
-        let spot = DockPrefs.index(of: appURL)
-        showInDock(folder) { _ in
-            takeOutOfDock([appURL]) {
-                if let spot { DockSettle.place(folder.id, at: spot) }
-            }
-        }
+        showInDock(folder) { _ in takeOutOfDock([appURL]) }
     }
 
     /// An app dragged onto another app in the Dock: the two become a folder, named after their
@@ -48,15 +42,13 @@ enum FolderActions {
         }
         EventInterceptor.shared.update(folders: store.folders)
         FolderPanelController.shared.close()
-        let spot = DockPrefs.index(of: target)
+        // Never by restarting the Dock: if something can't be done live, it's left as it is.
         takeOutOfDockTogether([dragged, target]) {
             DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
             DockLive.placeFolderAtPointer(folder) { placed in
-                if !placed, !DockPrefs.savedContains(folder.stubURL), DockAX.shared.item(for: folder.stubURL) == nil {
-                    // The pointer had left the Dock: in at the end now, into place at the next quiet moment.
-                    showInDock(folder) { _ in if let spot { DockSettle.place(folder.id, at: spot) } }
-                } else if !placed, let spot {
-                    DockSettle.place(folder.id, at: spot)
+                if !placed, DockAX.shared.item(for: folder.stubURL) == nil {
+                    // The pointer had left the Dock before it could slide in: at the end instead.
+                    showInDock(folder, restartIfNeeded: false)
                 }
                 EventInterceptor.shared.update(folders: store.folders)
                 NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
@@ -65,7 +57,7 @@ enum FolderActions {
     }
 
     /// Takes apps' tiles out of the Dock all at once (each one's menu pressed right after the
-    /// last), retrying briefly while the Dock finishes a drop.
+    /// last), retrying for up to two seconds while the Dock finishes a drop. Never restarts it.
     private static func takeOutOfDockTogether(_ urls: [URL], completion: @escaping () -> Void) {
         urls.forEach(DockPrefs.noteLiveRemoval)
         var remaining = urls
@@ -75,14 +67,14 @@ enum FolderActions {
                 return !DockLive.unpinApp(at: url)
             }
             guard !remaining.isEmpty, attemptsLeft > 1 else {
-                if !remaining.isEmpty { DockPrefs.modify { _ in } }   // the Dock wouldn't answer: restart it
+                remaining.forEach(DockPrefs.forgetLive)   // still there: say so
                 // A beat for the poofs before anything else moves.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { completion() }
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { pass(attemptsLeft - 1) }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { pass(8) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { pass(20) }
     }
 
     /// Creates a folder and adds its tile to the end of the Dock's apps.
@@ -115,13 +107,16 @@ enum FolderActions {
     // MARK: The Dock, live
 
     /// Puts a folder's tile in the Dock with no restart and no sound (see DockLive). If the Dock
-    /// doesn't play along, falls back to a restart.
-    private static func showInDock(_ folder: Folder, completion: @escaping (Bool) -> Void = { _ in }) {
+    /// doesn't play along, falls back to a restart (unless `restartIfNeeded` is false).
+    private static func showInDock(_ folder: Folder, restartIfNeeded: Bool = true,
+                                   completion: @escaping (Bool) -> Void = { _ in }) {
         if !FileManager.default.fileExists(atPath: folder.stubURL.path) { try? StubManager.install(folder) }
         DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
         NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
         DockLive.pinFolder(folder) { ok in
-            if !ok { DockPrefs.modify { _ in } }
+            if !ok {
+                if restartIfNeeded { DockPrefs.modify { _ in } } else { DockPrefs.forgetLive(folder.stubURL) }
+            }
             EventInterceptor.shared.update(folders: store.folders)
             NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
             completion(ok)
@@ -175,13 +170,11 @@ enum FolderActions {
         }
     }
 
-    /// Takes apps' tiles out of the Dock, one after another (each with the Dock's poof, unless the
-    /// app is running: then it just stops being kept).
+    /// Takes apps' tiles out of the Dock (each with the Dock's poof, unless the app is running:
+    /// then it just stops being kept). Never restarts the Dock.
     private static func takeOutOfDock(_ urls: [URL], completion: @escaping () -> Void = {}) {
-        guard let url = urls.first else { completion(); return }
-        DockPrefs.noteLiveRemoval(url)
-        if !DockLive.unpinApp(at: url) { DockPrefs.modify { _ in } }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { takeOutOfDock(Array(urls.dropFirst()), completion: completion) }
+        guard !urls.isEmpty else { completion(); return }
+        takeOutOfDockTogether(urls, completion: completion)
     }
 
     // MARK: Adding / removing apps

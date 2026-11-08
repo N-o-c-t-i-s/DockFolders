@@ -481,7 +481,7 @@ private struct GeneralView: View {
                         Button("Update Now") { DockSettle.apply() }
                     } label: {
                         Text("Dock changes waiting")
-                        Text("New names and positions reach the Dock when your Mac next locks or sleeps, so you never see it restart. Update Now restarts it right away.")
+                        Text("New names (and apps put back in the Dock while closed) reach the Dock when your Mac next locks or sleeps, so you never see it restart. Update Now restarts it right away.")
                     }
                 }
             }

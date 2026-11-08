@@ -139,13 +139,21 @@ enum DockLive {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { step(1) }
     }
 
-    /// The real pointer, if it's on the Dock (global, top-left origin).
+    /// The real pointer, if it's on the Dock (global, top-left origin). That includes the space
+    /// magnified icons grow into above the bar.
     static func pointerOnDock() -> CGPoint? {
         guard let list = DockAX.shared.list else { return nil }
-        let frame = AX.frame(list)
+        let bar = AX.frame(list)
+        guard bar.width > 0 else { return nil }
+        var zone = bar.insetBy(dx: -4, dy: -4)
+        switch CoreDock.orientation {
+        case .bottom: zone.origin.y -= bar.height; zone.size.height += bar.height
+        case .left: zone.size.width += bar.width
+        case .right: zone.origin.x -= bar.width; zone.size.width += bar.width
+        }
         let mouse = NSEvent.mouseLocation
         let point = CGPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mouse.y)
-        return frame.width > 0 && frame.insetBy(dx: -4, dy: -4).contains(point) ? point : nil
+        return zone.contains(point) ? point : nil
     }
 
     // MARK: Folder tiles
@@ -294,7 +302,7 @@ enum DockLive {
 
 // MARK: - Changes saved for a quiet moment
 
-/// Dock changes that need a restart (new names, exact positions, apps that aren't running) are
+/// Dock changes that need a restart (new names, and apps that aren't running put back in the Dock) are
 /// saved up and applied when nobody can see the Dock restart: when the Mac locks or its display
 /// sleeps. "Update Now" in Settings applies them straight away.
 enum DockSettle {
@@ -302,33 +310,21 @@ enum DockSettle {
 
     private static var defaults: UserDefaults { .standard }
 
-    /// Folder id → where in the Dock's apps it should end up.
-    private static var placements: [String: Int] {
-        get { defaults.dictionary(forKey: "pendingPlacements") as? [String: Int] ?? [:] }
-        set { defaults.set(newValue, forKey: "pendingPlacements") }
-    }
-
     /// App path → the folder whose tile it goes next to ("" for the end of the Dock's apps).
     private static var appsToAdd: [String: String] {
         get { defaults.dictionary(forKey: "pendingDockApps") as? [String: String] ?? [:] }
         set { defaults.set(newValue, forKey: "pendingDockApps") }
     }
 
-    static var hasPending: Bool { FolderActions.hasPendingRenames || !placements.isEmpty || !appsToAdd.isEmpty }
-
-    static func place(_ folderID: String, at index: Int) {
-        placements[folderID] = index
-        changed()
-    }
+    static var hasPending: Bool { FolderActions.hasPendingRenames || !appsToAdd.isEmpty }
 
     static func addApp(_ url: URL, near folderID: String) {
         appsToAdd[url.path] = folderID
         changed()
     }
 
-    /// A folder left the Dock (or was deleted): nothing to place, and its apps go at the end.
+    /// A folder left the Dock (or was deleted): apps waiting to go beside it go at the end.
     static func forget(_ folderID: String) {
-        placements.removeValue(forKey: folderID)
         appsToAdd = appsToAdd.mapValues { $0 == folderID ? "" : $0 }
         changed()
     }
@@ -338,6 +334,8 @@ enum DockSettle {
     }
 
     static func startObserving() {
+        // Folders are no longer moved into place by a restart (earlier builds saved that up).
+        defaults.removeObject(forKey: "pendingPlacements")
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
         ) { _ in applyIfPending() }
@@ -355,9 +353,7 @@ enum DockSettle {
     /// Everything waiting, in one restart.
     static func apply() {
         let renames = FolderActions.takePendingRenames()
-        let places = placements
         let adds = appsToAdd
-        placements = [:]
         appsToAdd = [:]
         let store = FolderStore.shared
         DockPrefs.modify(then: {
@@ -369,11 +365,6 @@ enum DockSettle {
             for (id, old) in renames {
                 guard let folder = store.folder(id: id), let index = DockPrefs.index(of: old, in: tiles) else { continue }
                 tiles[index] = DockPrefs.folderTile(folder)
-            }
-            for (id, target) in places {
-                guard let folder = store.folder(id: id), let index = DockPrefs.index(of: folder.stubURL, in: tiles) else { continue }
-                let tile = tiles.remove(at: index)
-                tiles.insert(tile, at: min(max(target, 0), tiles.count))
             }
             for (path, id) in adds {
                 let url = URL(fileURLWithPath: path)

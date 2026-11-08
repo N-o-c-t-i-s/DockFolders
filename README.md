@@ -99,8 +99,7 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   a real drag of the app, like one from Finder, so the Dock makes room and adds it where you let go.
   It's offered only as a link, and only over the Dock: let go anywhere else and it slides back.
 - **Saved for a quiet moment.** A few changes still need a restart: new names (the Dock only reads
-  names when it starts), moving a new folder into the spot of the app it was made from, and putting
-  an app that isn't running back in the Dock. They wait until your Mac locks or its display sleeps,
+  names when it starts) and putting an app that isn't running back in the Dock. They wait until your Mac locks or its display sleeps,
   so you never see the restart; **Update Now** in Settings does it straight away. If Dock Folders
   quits first, it picks pending names up again from the Dock.
 - **Glass finish.** System glass alone renders softer and lighter than the Dock's, so the popup,
