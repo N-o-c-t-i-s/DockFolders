@@ -20,7 +20,7 @@ Settings or Activity Monitor.
 
 | To | Do this |
 | --- | --- |
-| Make a folder | ⇧ Shift-right-click any app in the Dock → **New Folder with “App”…** (the app moves into it) |
+| Make a folder | Drag an app onto another app in the Dock and hold it until **Create Folder** appears, then let go; or ⇧ Shift-right-click any app → **New Folder with “App”…** |
 | Move a Dock app into a folder | Drag it onto the folder and hold it there until the folder opens, then let go (on the folder or inside it), or ⇧ Shift-right-click it → **Move “App” to Folder ▸** |
 | Move an app from a folder to the Dock | Drag it out of the open folder and drop it on the Dock where you want it |
 | Add any app | Drag it from Finder or the Apps window onto the folder in the Dock, or use **+** above the app list in Settings |
@@ -84,6 +84,15 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   folder sat when it started. Hold the app there for a moment and the folder springs open,
   outlined; let go on the folder or inside it and the app goes in (the Dock removes its tile). A
   quick pass over a folder doesn't count, so rearranging the Dock works as usual.
+- **Making a folder by dragging.** Holding a dragged app over another app shows a **Create
+  Folder** tag above it, drawn like the Dock's own name tags. Let go and the new folder is pinned
+  (silently), slid to where you let go with a drag sent only to the Dock (the Dock drops dragged
+  tiles under the real pointer, so this only runs while the pointer is still on the Dock), and the
+  two apps' tiles leave the Dock.
+- **Folder names.** New folders are named after their apps' App Store categories
+  (`LSApplicationCategoryType`), like iOS: two games make "Games"; related categories get a group
+  name ("Creativity", "Productivity & Finance", "Utilities"…); otherwise the category of the app
+  it was dropped onto. Apps that don't declare one give "Folder".
 - **Dragging an app out of a folder.** Once the icon is carried past the folder's edge it becomes
   a real drag of the app, like one from Finder, so the Dock makes room and adds it where you let go.
   It's offered only as a link, and only over the Dock: let go anywhere else and it slides back.

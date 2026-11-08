@@ -93,6 +93,61 @@ enum DockLive {
         return setKept(true, tile: tile)
     }
 
+    // MARK: Moving a tile
+
+    /// Slides a tile to the real pointer by dragging it with mouse events sent only to the Dock
+    /// (the pointer itself doesn't move). The Dock puts a dragged tile under the actual pointer,
+    /// whatever the events say, so this only runs while the pointer is on the Dock; if it leaves
+    /// part-way, the drag is cancelled (Esc) and the tile stays where it was.
+    static func moveTileToPointer(_ url: URL, completion: @escaping (Bool) -> Void) {
+        guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
+              let tile = DockAX.shared.item(for: url), let pointer = pointerOnDock() else { completion(false); return }
+        let start = CGPoint(x: tile.frame.midX, y: tile.frame.midY)
+        if abs(start.x - pointer.x) < tile.frame.width, abs(start.y - pointer.y) < tile.frame.height {
+            completion(true)   // already there
+            return
+        }
+        let pid = dock.processIdentifier
+        func post(_ type: CGEventType, _ p: CGPoint) {
+            CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.postToPid(pid)
+        }
+        let steps = 12
+        func step(_ i: Int) {
+            guard i <= steps else {
+                if let now = pointerOnDock() {
+                    post(.leftMouseUp, now)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { completion(true) }
+                } else {
+                    // Letting go off the Dock would drop the tile off it: cancel instead.
+                    for down in [true, false] {
+                        CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: down)?.postToPid(pid)
+                    }
+                    post(.leftMouseUp, start)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { completion(false) }
+                }
+                return
+            }
+            let t = CGFloat(i) / CGFloat(steps)
+            let target = pointerOnDock() ?? pointer
+            // A small lift at the start, as a hand-made drag has.
+            let lift: CGFloat = i < 3 ? CGFloat(i) * 3 : 6
+            post(.leftMouseDragged, CGPoint(x: start.x + (target.x - start.x) * t,
+                                            y: start.y + (target.y - start.y) * t - lift))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { step(i + 1) }
+        }
+        post(.leftMouseDown, start)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { step(1) }
+    }
+
+    /// The real pointer, if it's on the Dock (global, top-left origin).
+    static func pointerOnDock() -> CGPoint? {
+        guard let list = DockAX.shared.list else { return nil }
+        let frame = AX.frame(list)
+        let mouse = NSEvent.mouseLocation
+        let point = CGPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mouse.y)
+        return frame.width > 0 && frame.insetBy(dx: -4, dy: -4).contains(point) ? point : nil
+    }
+
     // MARK: Folder tiles
 
     /// Puts a folder's tile in the Dock: its stub runs, so the Dock shows it like any open app,

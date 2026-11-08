@@ -7,14 +7,15 @@ enum FolderActions {
 
     // MARK: Creating
 
-    /// New folders start out called "Folder"; you can name them in Settings.
+    /// New folders are named after their apps' categories (see FolderNaming), or "Folder" when
+    /// the apps don't say; you can rename them in Settings.
     static let folderName = "Folder"
 
     /// A new folder in the app's place: the folder joins the Dock (silently) and the app's tile
     /// leaves it. The folder lands at the end of the Dock's apps, and moves into the app's old
     /// spot the next time the Dock restarts unseen (when the Mac locks or sleeps).
     static func newFolder(with appURL: URL) {
-        let folder = store.create(name: folderName, apps: [appURL])
+        let folder = store.create(name: FolderNaming.name(for: [appURL]), apps: [appURL])
         do {
             try StubManager.install(folder)
         } catch {
@@ -32,9 +33,35 @@ enum FolderActions {
         }
     }
 
+    /// An app dragged onto another app in the Dock: the two become a folder, named after their
+    /// categories, in their place. The folder joins the Dock (silently), slides to where you let
+    /// go, and then the two apps' tiles leave the Dock.
+    static func combineInDock(dragged: URL, onto target: URL) {
+        let apps = [target, dragged]
+        let folder = store.create(name: FolderNaming.name(for: apps), apps: apps)
+        do {
+            try StubManager.install(folder)
+        } catch {
+            store.delete(folder.id)
+            Prompt.error("Couldn’t create the folder.", error)
+            return
+        }
+        EventInterceptor.shared.update(folders: store.folders)
+        FolderPanelController.shared.close()
+        let spot = DockPrefs.index(of: target)
+        showInDock(folder) { _ in
+            DockLive.moveTileToPointer(folder.stubURL) { moved in
+                // The pointer had left the Dock: it moves into place at the next quiet moment.
+                if !moved, let spot { DockSettle.place(folder.id, at: spot) }
+                takeOutOfDock([dragged, target])
+            }
+        }
+    }
+
     /// Creates a folder and adds its tile to the end of the Dock's apps.
     static func createFolder(apps: [URL]) {
-        let folder = store.create(name: folderName, apps: apps.filter { $0.pathExtension == "app" })
+        let apps = apps.filter { $0.pathExtension == "app" }
+        let folder = store.create(name: FolderNaming.name(for: apps), apps: apps)
         do {
             try StubManager.install(folder)
         } catch {

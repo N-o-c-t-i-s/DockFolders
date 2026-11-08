@@ -546,6 +546,7 @@ private struct GeneralView: View {
                 Tip(symbol: "cursorarrow.click.2", text: "Click a folder in the Dock to open it; drag icons inside to rearrange them.")
                 Tip(symbol: "square.and.arrow.down", text: "Drag an app from the Dock onto a folder and hold it there: the folder opens; let go to put the app in. Apps from Finder can go straight onto the folder.")
                 Tip(symbol: "dock.arrow.down.rectangle", text: "Drag an app out of an open folder and onto the Dock to put it back in the Dock.")
+                Tip(symbol: "folder.badge.plus", text: "Drag an app onto another app in the Dock and hold it there until Create Folder appears; let go to make a folder of the two, named after what they are.")
                 Tip(symbol: "shift", text: "⇧ Shift-right-click any app in the Dock to start a folder with it.")
             }
 
