@@ -6,9 +6,12 @@ enum DFShared {
     static let stubBundleIDPrefix = "com.mylesdean.DockFolders.folder."
     static let urlScheme = "dockfolders"
     static let folderIDInfoKey = "DFFolderID"
+    /// Which tile image a stub's plug-in shows (see Folder.tileKey); folder stubs made before
+    /// slots don't have it and use their folder id.
+    static let tileKeyInfoKey = "DFTileKey"
 
     /// Posted (distributed) by the agent whenever a folder's tile image changes.
-    /// `object` is the folder id, or "*" for every folder.
+    /// `object` is the folder's tile key, or "*" for every folder.
     static let tileChangedNotification = Notification.Name("com.mylesdean.DockFolders.tileChanged")
 
     /// The real home folder, even when running inside an XPC service.
@@ -27,7 +30,7 @@ enum DFShared {
     static var stubsDirectory: URL { supportDirectory.appendingPathComponent("Folders", isDirectory: true) }
     static var storeURL: URL { supportDirectory.appendingPathComponent("folders.json") }
 
-    static func tileImageURL(for folderID: String) -> URL {
-        tilesDirectory.appendingPathComponent("\(folderID).png")
+    static func tileImageURL(for tileKey: String) -> URL {
+        tilesDirectory.appendingPathComponent("\(tileKey).png")
     }
 }

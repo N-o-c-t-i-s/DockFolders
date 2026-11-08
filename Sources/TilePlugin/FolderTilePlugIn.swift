@@ -11,8 +11,12 @@ final class FolderTilePlugIn: NSObject, NSDockTilePlugIn {
     private var dockTile: NSDockTile?
     private var observer: NSObjectProtocol?
 
-    private lazy var folderID: String = {
-        Bundle(for: FolderTilePlugIn.self).object(forInfoDictionaryKey: DFShared.folderIDInfoKey) as? String ?? ""
+    /// Which tile image to show. Stable per stub slot: the Dock may keep a slot's plug-in loaded
+    /// after its folder is deleted and reuse it for the next folder in that slot.
+    private lazy var tileKey: String = {
+        let bundle = Bundle(for: FolderTilePlugIn.self)
+        return bundle.object(forInfoDictionaryKey: DFShared.tileKeyInfoKey) as? String
+            ?? bundle.object(forInfoDictionaryKey: DFShared.folderIDInfoKey) as? String ?? ""
     }()
 
     func setDockTile(_ dockTile: NSDockTile?) {
@@ -21,7 +25,7 @@ final class FolderTilePlugIn: NSObject, NSDockTilePlugIn {
         self.dockTile = dockTile
         guard dockTile != nil else { return }
 
-        let id = folderID
+        let id = tileKey
         observer = DistributedNotificationCenter.default().addObserver(
             forName: DFShared.tileChangedNotification, object: nil, queue: .main
         ) { [weak self] note in
@@ -33,7 +37,7 @@ final class FolderTilePlugIn: NSObject, NSDockTilePlugIn {
 
     private func redraw() {
         guard let dockTile else { return }
-        guard let image = NSImage(contentsOf: DFShared.tileImageURL(for: folderID)) else {
+        guard let image = NSImage(contentsOf: DFShared.tileImageURL(for: tileKey)) else {
             dockTile.contentView = nil
             dockTile.display()
             return

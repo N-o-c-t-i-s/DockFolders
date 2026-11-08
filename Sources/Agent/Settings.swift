@@ -17,6 +17,8 @@ final class SettingsModel: ObservableObject {
     @Published var accessibilityAllowed = false
     @Published var selection: SettingsPage?
     @Published var confirmingDelete: Folder?
+    /// A folder whose name field should take focus (all selected, ready to type) when shown.
+    @Published var editNameOf: String?
 
     // Folder appearance (Settings → General).
     @Published var showsNames = FolderPrefs.showsNames { didSet { FolderPrefs.showsNames = showsNames } }
@@ -344,12 +346,22 @@ private struct FolderDetailView: View {
             .formStyle(.grouped)
             .contentMargins(.top, 0, for: .scrollContent)
             .onAppear {
-                DispatchQueue.main.async { editingName = false }
+                DispatchQueue.main.async { takeNameRequest() }
             }
             .onChange(of: folder.apps) { _, apps in order = apps.map { URL(fileURLWithPath: $0) } }
             .onChange(of: editingName) { _, editing in if !editing { save() } }
+            .onChange(of: model.editNameOf) { _, id in if id == folderID { takeNameRequest() } }
             .onDisappear { save() }
         }
+    }
+
+    /// "Edit Folder Name…": focus the name with all of it selected, ready to type over.
+    /// Otherwise nothing starts out being edited.
+    private func takeNameRequest() {
+        guard model.editNameOf == folderID else { editingName = false; return }
+        model.editNameOf = nil
+        editingName = true
+        DispatchQueue.main.async { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }
     }
 
     private func trimmed() -> String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -547,7 +559,6 @@ private struct GeneralView: View {
                 Tip(symbol: "square.and.arrow.down", text: "Drag an app from the Dock onto a folder and hold it there: the folder opens; let go to put the app in. Apps from Finder can go straight onto the folder.")
                 Tip(symbol: "dock.arrow.down.rectangle", text: "Drag an app out of an open folder and onto the Dock to put it back in the Dock.")
                 Tip(symbol: "folder.badge.plus", text: "Drag an app onto another app in the Dock and hold it there until Create Folder appears; let go to make a folder of the two, named after what they are.")
-                Tip(symbol: "shift", text: "⇧ Shift-right-click any app in the Dock to start a folder with it.")
             }
 
             Section {
@@ -586,10 +597,21 @@ final class SettingsController: NSObject, NSWindowDelegate {
     var isVisible: Bool { window?.isVisible == true }
 
     /// Opens Settings, optionally on one folder, and brings it to the front.
-    func show(folderID: String? = nil) {
+    var settingsWindow: NSWindow? { window }
+
+    /// Opens Settings on a folder (from its Dock menu) with the Add Apps window open on it.
+    func addApps(to folderID: String) {
+        show(folderID: folderID)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { FolderActions.chooseApps(for: folderID) }
+    }
+
+    func show(folderID: String? = nil, editingName: Bool = false) {
         FolderPanelController.shared.close()
         model.reload()
-        if let folderID, model.folder(folderID) != nil { model.selection = .folder(folderID) }
+        if let folderID, model.folder(folderID) != nil {
+            model.selection = .folder(folderID)
+            if editingName { model.editNameOf = folderID }
+        }
 
         if window == nil {
             let host = NSHostingController(rootView: SettingsView(model: model))
@@ -612,8 +634,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window?.orderFrontRegardless()
         window?.makeKeyAndOrderFront(nil)
-        // Nothing starts out being edited.
-        DispatchQueue.main.async { self.window?.makeFirstResponder(nil) }
+        // Nothing starts out being edited (unless the name was asked for).
+        if !editingName { DispatchQueue.main.async { self.window?.makeFirstResponder(nil) } }
     }
 
     func close() { window?.performClose(nil) }

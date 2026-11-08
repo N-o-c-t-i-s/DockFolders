@@ -5,7 +5,6 @@ import AppKit
 /// • Click a folder tile      → open its popup (the Dock never launches the stub).
 /// • Drag a folder tile       → replayed to the Dock, so tiles can still be rearranged.
 /// • Right-click a folder     → our folder menu.
-/// • ⇧ right-click any app    → "New Folder" / "Add to Folder" menu.
 /// • Drag an app's tile        → watched (not changed), so it can be dropped onto a folder.
 /// • Click anywhere else while a popup is open → close it.
 final class EventInterceptor {
@@ -14,7 +13,6 @@ final class EventInterceptor {
     // Main-thread callbacks.
     var onFolderClick: ((String, DockItem) -> Void)?
     var onFolderMenu: ((String, DockItem) -> Void)?
-    var onDockAppMenu: ((DockItem) -> Void)?
     var onOutsideClick: (() -> Void)?
     var onMenuOutsideClick: (() -> Void)?
     /// Dragging an app's tile (the Dock does the dragging; we only watch). Points are global, top-left origin.
@@ -186,11 +184,6 @@ final class EventInterceptor {
                 main { self.onFolderMenu?(id, item) }
                 return nil
             }
-            if event.flags.contains(.maskShift), let item = appHit(at: location) {
-                swallowRightUp = true
-                main { self.onDockAppMenu?(item) }
-                return nil
-            }
             if panel != nil { main { self.onOutsideClick?() } }
 
         case .otherMouseDown:
@@ -225,11 +218,6 @@ final class EventInterceptor {
         guard let url = item.url else { return nil }
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
         return lock.withLock { stubPaths[path] }
-    }
-
-    private func appHit(at p: CGPoint) -> DockItem? {
-        guard nearDockEdge(p), let item = DockAX.shared.item(at: p), isPlainApp(item) else { return nil }
-        return item
     }
 
     /// An ordinary app's tile (not a folder, Finder, the Apps launcher, a stack or the Trash).

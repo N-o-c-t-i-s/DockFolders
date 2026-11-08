@@ -20,14 +20,15 @@ Settings or Activity Monitor.
 
 | To | Do this |
 | --- | --- |
-| Make a folder | Drag an app onto another app in the Dock and hold it until **Create Folder** appears, then let go; or ⇧ Shift-right-click any app → **New Folder with “App”…** |
-| Move a Dock app into a folder | Drag it onto the folder and hold it there until the folder opens, then let go (on the folder or inside it), or ⇧ Shift-right-click it → **Move “App” to Folder ▸** |
+| Make a folder | Drag an app onto another app in the Dock and hold it until **Create Folder** appears, then let go; or **+** in Settings |
+| Move a Dock app into a folder | Drag it onto the folder and hold it there until the folder opens, then let go (on the folder or inside it). An app lives in one folder at a time, so this moves it out of any other |
 | Move an app from a folder to the Dock | Drag it out of the open folder and drop it on the Dock where you want it |
 | Add any app | Drag it from Finder or the Apps window onto the folder in the Dock, or use **+** above the app list in Settings |
 | Open / close a folder | Click it. Move off its sides or top (it closes at once, like moving off the Dock), move away for a moment, click outside, or launch an app to close it |
 | Turn pages | Two-finger swipe, or click the dots |
 | Rearrange apps in a folder | Drag an icon; hold it near the left/right edge to change pages |
-| Name a folder, add/remove/reorder its apps, show/hide it in the Dock, delete it | Right-click the folder → **Open Settings…** (or open Dock Folders from Spotlight) |
+| Rename a folder, add apps | Right-click the folder → **Edit Folder Name…** (opens Settings with the name ready to type) or **Add Apps…** (opens Settings with the app picker) |
+| Remove/reorder apps, show/hide a folder in the Dock, delete it, options | Right-click the folder → **Settings…** (or open Dock Folders from Spotlight) |
 | Take an app out | Right-click it in the folder → Options → **Remove from Folder** or **Move to Dock** |
 | Apps per page (3, 6, 9 or 16), names or running dots under apps, icon size, magnification | Settings → ⚙︎ General → **Inside Folders** |
 | Rearrange folders in the Dock | Drag them like any other Dock icon |
@@ -114,9 +115,13 @@ These come from what macOS lets other apps do with the Dock (changing them would
 running inside the Dock, which needs System Integrity Protection turned off):
 
 - **No "jiggle" mode.** The Dock draws its own icons; other apps can't animate them. Folders are
-  made by dragging an app onto another and holding, or with ⇧ Shift-right-click.
-- **Nothing can be added to the Dock's own right-click menu.** That's why folder actions use
-  ⇧ Shift-right-click and their own glass menus.
+  made by dragging an app onto another and holding.
+- **Nothing can be added to the Dock's own right-click menu** (for apps). A folder's own menu is
+  drawn by Dock Folders in glass.
+- **A one-time "Dock tile extension" notice.** Each folder's icon is drawn by a small Dock tile
+  plug-in, and macOS announces a new one. Folders reuse a few identifiers ("slots"), so the notice
+  only appears the first time a slot is used (about once per folder you keep at the same time),
+  not every time you make one.
 - **Open apps also appear in the Dock.** macOS shows every running app there; only the app itself
   can change that.
 - **The folder's tile is dimmed while its folder is open** (with an auto-hiding Dock). Keeping the

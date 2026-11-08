@@ -78,7 +78,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "restore":
                 FolderActions.putBackInDock([id])
             case "settings":
-                SettingsController.shared.show(folderID: id)
+                // dockfolders://settings?id=…&editName=1 opens it with the name ready to type;
+                // …&addApps=1 with the Add Apps window open.
+                if items.contains(where: { $0.name == "addApps" && $0.value == "1" }) {
+                    SettingsController.shared.addApps(to: id)
+                } else {
+                    let editName = items.contains { $0.name == "editName" && $0.value == "1" }
+                    SettingsController.shared.show(folderID: id, editingName: editName)
+                }
             case "add":
                 let paths = items.filter { $0.name == "path" }.compactMap(\.value)
                 FolderActions.add(paths.map { URL(fileURLWithPath: $0) }, to: id, removeFromDock: false)
@@ -109,10 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         interceptor.update(folders: store.folders)
         interceptor.onFolderClick = { id, item in FolderPanelController.shared.toggle(folderID: id, item: item) }
         interceptor.onFolderMenu = { id, item in DockMenus.show(DockMenus.folderEntries(folderID: id), at: item) }
-        interceptor.onDockAppMenu = { item in
-            guard let url = item.url else { return }
-            DockMenus.show(DockMenus.appEntries(appURL: url), at: item)
-        }
         interceptor.onOutsideClick = { FolderPanelController.shared.close() }
         interceptor.onAppDragBegan = { DockDragCollector.shared.began($0) }
         interceptor.onAppDragMoved = { DockDragCollector.shared.moved(to: $0) }

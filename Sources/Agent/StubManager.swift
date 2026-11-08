@@ -27,18 +27,21 @@ enum StubManager {
 
         let contents = staging.appendingPathComponent("Contents")
         let plugin = contents.appendingPathComponent("PlugIns/FolderTile.docktileplugin")
-        let className = "DFTile_" + folder.id
+        // Unique among the plug-ins the Dock loads, and the same for a slot whoever uses it.
+        let className = "DFTile_" + (folder.slot.map { String(format: "slot%012d", $0) } ?? folder.id)
 
         try editPlist(contents.appendingPathComponent("Info.plist")) { info in
             info["CFBundleIdentifier"] = folder.bundleIdentifier
             info["CFBundleName"] = folder.name
             info["CFBundleDisplayName"] = folder.name
             info[DFShared.folderIDInfoKey] = folder.id
+            info[DFShared.tileKeyInfoKey] = folder.tileKey
         }
         try editPlist(plugin.appendingPathComponent("Contents/Info.plist")) { info in
             info["CFBundleIdentifier"] = folder.bundleIdentifier + ".tile"
             info["NSPrincipalClass"] = className
             info[DFShared.folderIDInfoKey] = folder.id
+            info[DFShared.tileKeyInfoKey] = folder.tileKey
         }
 
         // Give this copy of the plug-in a unique Objective-C class name (same length as the placeholder).
@@ -99,17 +102,17 @@ enum StubManager {
         stopIndicator(folder)
         LSRegisterURL(folder.stubURL as CFURL, false)
         try? FileManager.default.removeItem(at: folder.stubURL)
-        try? FileManager.default.removeItem(at: DFShared.tileImageURL(for: folder.id))
+        try? FileManager.default.removeItem(at: DFShared.tileImageURL(for: folder.tileKey))
     }
 
     /// Re-renders the folder's tile image and tells its Dock plug-in to redraw.
     static func refreshTile(_ folder: Folder) {
         try? FileManager.default.createDirectory(at: DFShared.tilesDirectory, withIntermediateDirectories: true)
         if let png = TileRenderer.pngData(apps: folder.appURLs, pixelSize: 512, dark: isDarkMode) {
-            try? png.write(to: DFShared.tileImageURL(for: folder.id), options: .atomic)
+            try? png.write(to: DFShared.tileImageURL(for: folder.tileKey), options: .atomic)
         }
         DistributedNotificationCenter.default().postNotificationName(
-            DFShared.tileChangedNotification, object: folder.id, userInfo: nil, deliverImmediately: true)
+            DFShared.tileChangedNotification, object: folder.tileKey, userInfo: nil, deliverImmediately: true)
     }
 
     /// Whether any app in the folder is running.

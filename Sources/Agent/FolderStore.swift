@@ -9,10 +9,17 @@ struct Folder: Codable, Identifiable, Equatable {
     var stubName: String
     /// Set when you turn off Show in Dock, so adding apps doesn't bring the folder back.
     var keepOutOfDock: Bool? = nil
+    /// Folders get one of a few reusable stub identifiers ("slots"), so macOS only announces a new
+    /// Dock tile extension the first time a slot is ever used, not for every new folder (it keys
+    /// them on the identifier, wherever the stub is). Folders made before slots keep their own.
+    var slot: Int? = nil
 
     var appURLs: [URL] { apps.map { URL(fileURLWithPath: $0) } }
     var stubURL: URL { DFShared.stubsDirectory.appendingPathComponent(stubName, isDirectory: true) }
-    var bundleIdentifier: String { DFShared.stubBundleIDPrefix + id }
+    var bundleIdentifier: String { DFShared.stubBundleIDPrefix + (slot.map { "slot\($0)" } ?? id) }
+    /// Names the folder's tile image; stable per slot, as the Dock may keep a slot's plug-in loaded.
+    var tileKey: String { slot.map { "slot\($0)" } ?? id }
+
 }
 
 /// Persists folders as JSON in Application Support.
@@ -59,7 +66,10 @@ final class FolderStore {
         repeat {
             id = (0..<16).map { _ in String("0123456789abcdef".randomElement()!) }.joined()
         } while folder(id: id) != nil
-        let folder = Folder(id: id, name: name, apps: Self.unique(apps.map(\.path)), stubName: uniqueStubName(for: name, excluding: nil))
+        let used = Set(folders.compactMap(\.slot))
+        let slot = (1...).first { !used.contains($0) }!
+        let folder = Folder(id: id, name: name, apps: Self.unique(apps.map(\.path)),
+                            stubName: uniqueStubName(for: name, excluding: nil), slot: slot)
         folders.append(folder)
         save()
         onChange?(folder)

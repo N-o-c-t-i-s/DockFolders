@@ -338,7 +338,14 @@ enum DockLive {
                 waitForRunningTile(url: url, app: app, deadline: Date().addingTimeInterval(5), settle: 0.05) { tile in
                     guard tile != nil else { finish(false); return }
                     moveTileToPointer(url) { moved in
-                        ensureKept(url, deadline: Date().addingTimeInterval(moved ? 3 : 0)) { finish(moved) }
+                        if moved {
+                            // Moving an open app's tile keeps it in the Dock. Whether it did is
+                            // checked afterwards without opening its menu (see verifyKept).
+                            finish(true)
+                        } else {
+                            // Not slid (the pointer had left the Dock): keep it where it is.
+                            ensureKept(url, deadline: Date()) { finish(false) }
+                        }
                     }
                 }
             }

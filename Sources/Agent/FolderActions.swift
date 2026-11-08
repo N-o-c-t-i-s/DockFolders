@@ -11,23 +11,6 @@ enum FolderActions {
     /// the apps don't say; you can rename them in Settings.
     static let folderName = "Folder"
 
-    /// A new folder for an app: the folder joins the Dock (silently, at the end of its apps) and
-    /// the app's tile leaves it.
-    static func newFolder(with appURL: URL) {
-        let folder = store.create(name: FolderNaming.name(for: [appURL]), apps: [appURL])
-        takeFromOtherFolders([appURL], except: folder.id)
-        do {
-            try StubManager.install(folder)
-        } catch {
-            store.delete(folder.id)
-            Prompt.error("Couldn’t create the folder.", error)
-            return
-        }
-        EventInterceptor.shared.update(folders: store.folders)
-        FolderPanelController.shared.close()
-        showInDock(folder) { _ in takeOutOfDock([appURL]) }
-    }
-
     /// An app dragged onto another app in the Dock: the two become a folder, named after their
     /// categories, in their place. Both apps' tiles leave the Dock together, then the folder
     /// comes in where they were.
@@ -234,8 +217,17 @@ enum FolderActions {
         panel.treatsFilePackagesAsDirectories = false
         panel.allowedContentTypes = [.application]
         panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        // Its own identity, so it remembers the view you last used in it (e.g. Gallery) apart from
+        // other open panels. (macOS doesn't let apps pick the view themselves.)
+        panel.identifier = NSUserInterfaceItemIdentifier("DockFoldersAddApps")
+        if let window = SettingsController.shared.settingsWindow, window.isVisible {
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK { add(panel.urls, to: folderID, removeFromDock: false) }
+            }
+            return
+        }
         let response = panel.runModal()
-        if !SettingsController.shared.isVisible { previous?.activate() }
+        previous?.activate()
         if response == .OK { add(panel.urls, to: folderID, removeFromDock: false) }
     }
 

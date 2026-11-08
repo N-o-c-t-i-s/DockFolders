@@ -12,6 +12,7 @@ final class StubDelegate: NSObject, NSApplicationDelegate {
     private var droppedFiles: [URL] = []
     private var isIndicator = false
     private var folderID: String { Bundle.main.object(forInfoDictionaryKey: DFShared.folderIDInfoKey) as? String ?? "" }
+    private var tileKey: String { Bundle.main.object(forInfoDictionaryKey: DFShared.tileKeyInfoKey) as? String ?? folderID }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Dock Folders launches each new stub once with --register: that first launch is what
@@ -64,13 +65,13 @@ final class StubDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] note in
             guard let self else { return }
             let target = note.object as? String
-            if target == nil || target == "*" || target == self.folderID { self.showTile() }
+            if target == nil || target == "*" || target == self.tileKey { self.showTile() }
         }
     }
 
     /// While running, the Dock shows the app's own tile, so mirror the folder's 2×2 icon.
     private func showTile() {
-        guard let image = NSImage(contentsOf: DFShared.tileImageURL(for: folderID)) else { return }
+        guard let image = NSImage(contentsOf: DFShared.tileImageURL(for: tileKey)) else { return }
         NSApp.applicationIconImage = image
         let tile = NSApp.dockTile
         let view = NSImageView(frame: NSRect(origin: .zero, size: tile.size))

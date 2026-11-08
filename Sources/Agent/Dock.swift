@@ -196,23 +196,14 @@ final class DockAX {
 
     /// Closes a Dock menu that's open on another tile (opening a folder should dismiss it,
     /// as clicking any other Dock icon would).
+    ///
+    /// Only through Accessibility: Escape sent to a Dock process that has no menu to cancel makes
+    /// the system's "not allowed" sound.
     func dismissMenus() {
-        let helper = helperMenus()
-        if !helper.isEmpty {
-            helper.forEach { AXUIElementPerformAction($0, kAXCancelAction as CFString) }
-            if !helperMenus().isEmpty, let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock.helper").first?.processIdentifier {
-                for down in [true, false] { CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: down)?.postToPid(pid) }
-            }
-        }
+        helperMenus().forEach { AXUIElementPerformAction($0, kAXCancelAction as CFString) }
         for item in items {
             guard let menu: AXUIElement = AX.value(item.element, "AXShownMenuUIElement") else { continue }
-            if AXUIElementPerformAction(menu, kAXCancelAction as CFString) != .success {
-                // Fall back to Escape, sent straight to the Dock.
-                guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return }
-                for down in [true, false] {
-                    CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: down)?.postToPid(dock.processIdentifier)
-                }
-            }
+            AXUIElementPerformAction(menu, kAXCancelAction as CFString)
         }
     }
 

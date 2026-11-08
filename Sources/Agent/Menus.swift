@@ -82,21 +82,13 @@ enum DockMenus {
     /// Right-click on a folder tile: everything else lives in Settings.
     static func folderEntries(folderID: String) -> [MenuEntry] {
         guard FolderStore.shared.folder(id: folderID) != nil else { return [] }
-        return [.action("Open Settings…") { SettingsController.shared.show(folderID: folderID) }]
-    }
-
-    /// ⇧ right-click on an app tile.
-    static func appEntries(appURL: URL) -> [MenuEntry] {
-        let name = FolderPanelController.displayName(of: appURL)
-        var entries: [MenuEntry] = [.action("New Folder with “\(name)”") { FolderActions.newFolder(with: appURL) }]
-        // Not the folder it's already in (an app lives in one folder at a time).
-        let folders = FolderStore.shared.folders.filter { !$0.apps.contains(appURL.path) }
-        if !folders.isEmpty {
-            entries.append(.submenu("Move “\(name)” to Folder", folders.map { folder in
-                .action(folder.name) { FolderActions.add([appURL], to: folder.id, removeFromDock: true) }
-            }))
-        }
-        return entries
+        let settings = SettingsController.shared
+        return [
+            .action("Edit Folder Name…") { settings.show(folderID: folderID, editingName: true) },
+            .action("Add Apps…") { settings.addApps(to: folderID) },
+            .separator,
+            .action("Settings…") { settings.show(folderID: folderID) },
+        ]
     }
 
     /// Shows a menu attached to a Dock tile (where its name tag goes), keeping the Dock on screen.
