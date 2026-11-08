@@ -110,17 +110,27 @@ No screen capturing and no Dock code injection; everything uses system mechanism
 
 ## Limitations
 
-- Apple doesn't let other apps add items to the Dock's own right-click menu (it would need
-  SIP disabled). That's why creating a folder is ⇧ Shift-right-click.
-- Running apps still appear in the Dock's running-apps section; macOS shows every running app
-  there, and only the app itself (or code running inside the Dock, which needs SIP disabled) can
-  change that.
-- Apple's own call for adding items to the Dock (`CoreDockAddFileToDock`) is reserved for Finder and
-  Safari, so live changes go through the Dock's menu instead, which shows for a moment.
-- The Dock draws its running dots only for running apps, so a folder's dot is drawn inside the
-  folder's own icon, a few points higher than the Dock's other dots.
-- App-specific Dock menu items (e.g. Music's playback controls) aren't available to other apps,
-  so the in-folder menu has the standard items only.
+These come from what macOS lets other apps do with the Dock (changing them would need code
+running inside the Dock, which needs System Integrity Protection turned off):
+
+- **No "jiggle" mode.** The Dock draws its own icons; other apps can't animate them. Folders are
+  made by dragging an app onto another and holding, or with ⇧ Shift-right-click.
+- **Nothing can be added to the Dock's own right-click menu.** That's why folder actions use
+  ⇧ Shift-right-click and their own glass menus.
+- **Open apps also appear in the Dock.** macOS shows every running app there; only the app itself
+  can change that.
+- **The folder's tile is dimmed while its folder is open** (with an auto-hiding Dock). Keeping the
+  Dock up means putting it in its keyboard mode, where it always marks one item: marking the
+  folder's tile dims it; marking anything else shows a stray name label.
+- **New names reach the Dock only when it restarts.** That happens when your Mac next locks or
+  sleeps, so you don't see it, or straight away with **Update Now** in Settings. Moving an app that
+  isn't open from a folder back to the Dock with **Move to Dock** waits for that too (dragging it
+  onto the Dock doesn't).
+- **Live Dock changes show the Dock's menu for a moment.** Apple's call for adding items to the
+  Dock (`CoreDockAddFileToDock`) is reserved for Finder and Safari, so changes go through the
+  Dock's own **Keep in Dock / Remove from Dock**; tiles leaving get the Dock's usual poof.
+- **App-specific Dock menu items** (Music's playback controls, Notes' New Note) aren't available
+  to other apps, so the in-folder menu has the standard items only.
 
 ## Layout
 
