@@ -12,8 +12,8 @@ enum FolderActions {
     static let folderName = "Folder"
 
     /// An app dragged onto another app in the Dock: the two become a folder, named after their
-    /// categories. Both apps' tiles leave the Dock together, then the folder appears at the end of
-    /// the Dock's apps (drag it wherever you like).
+    /// categories, in their place. Both apps' tiles leave the Dock together, then the folder
+    /// comes in where they were.
     static func combineInDock(dragged: URL, onto target: URL) {
         let apps = [target, dragged]
         let folder = store.create(name: FolderNaming.name(for: apps), apps: apps)
@@ -28,7 +28,17 @@ enum FolderActions {
         EventInterceptor.shared.update(folders: store.folders)
         FolderPanelController.shared.close()
         // Never by restarting the Dock: if something can't be done live, it's left as it is.
-        takeOutOfDockTogether([dragged, target]) { showInDock(folder) }
+        takeOutOfDockTogether([dragged, target]) {
+            DockPrefs.noteLivePin(folder.stubURL, tile: DockPrefs.folderTile(folder))
+            DockLive.placeFolderAtPointer(folder) { _ in
+                // Make sure it really is in the Dock now; if not, put it in (at the end).
+                DockLive.verifyKept(folder, url: folder.stubURL) { kept in
+                    if !kept { showInDock(folder) }
+                    EventInterceptor.shared.update(folders: store.folders)
+                    NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
+                }
+            }
+        }
     }
 
     /// Takes apps' tiles out of the Dock together, retrying a few times while the Dock finishes a
