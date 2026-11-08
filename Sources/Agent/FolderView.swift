@@ -157,7 +157,7 @@ struct FolderMetrics: Equatable {
     var stripHeight: CGFloat { padding + gridHeight + (pages > 1 ? 0 : padding) }
     var bodyHeight: CGFloat { ceil(stripHeight + (pages > 1 ? dotsHeight + padding * 0.5 : 0)) }
     /// Concentric with the icons' own corners, like the Dock.
-    var cornerRadius: CGFloat { (iconSize - artworkInset * 2) * 0.225 + visibleGap + magnificationRoom }
+    var cornerRadius: CGFloat { (iconSize - artworkInset * 2) * TileRenderer.iconCornerRatio + visibleGap + magnificationRoom }
 
     /// The popup's whole window content: glass, pointer and the transparent margins.
     func contentSize(arrowOnSide: Bool) -> CGSize {

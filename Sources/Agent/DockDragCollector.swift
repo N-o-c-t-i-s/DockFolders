@@ -34,6 +34,9 @@ final class DockDragCollector {
     private var openFolderID: String?
     /// The app showing "Create Folder".
     private var armedApp: URL?
+    /// While a dragged app rests on an open folder's tile: keeps the Dock from spring-loading it.
+    private var springGuard: Timer?
+    private var springNudge: CGFloat = 1
 
     private static let holdDelay: TimeInterval = 0.18
 
@@ -80,6 +83,7 @@ final class DockDragCollector {
                 panel.show(folderID: id, item: nil)
                 panel.heldForDrop = true
                 panel.setDropTargeted(true)
+                self.startSpringGuard()
             case .app(let url):
                 guard let frame = self.currentFrame(of: over) else { return }
                 self.armedApp = url
@@ -98,6 +102,8 @@ final class DockDragCollector {
         armedApp = nil
         hover = nil
         hoverToken += 1
+        springGuard?.invalidate()
+        springGuard = nil
         panel.heldForDrop = false
         panel.setDropTargeted(false)
         DockTag.shared.hide()
@@ -109,6 +115,26 @@ final class DockDragCollector {
             FolderActions.dropFromDock(url, into: open, releasedOnDock: !inPopup)
         } else if let armed, target(at: point) == .app(armed) {
             FolderActions.combineInDock(dragged: url, onto: armed)
+        }
+    }
+
+    // MARK: Spring-loading
+
+    /// Holding a dragged item on an app's Dock tile for half a second makes the Dock spring-load
+    /// it (showing that app's windows to drop into). Other apps can't switch that off for the
+    /// Dock alone, so while the drag rests on the open folder's tile, nudge the Dock's idea of the
+    /// pointer by a point every 0.2 s (sent only to the Dock; the real pointer doesn't move, and
+    /// the Dock drops under the real pointer), so it never counts as resting.
+    private func startSpringGuard() {
+        springGuard?.invalidate()
+        springGuard = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self, self.dragged != nil, let open = self.openFolderID,
+                  self.target(at: self.lastPoint) == .folder(open),
+                  let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return }
+            self.springNudge = -self.springNudge
+            let p = CGPoint(x: self.lastPoint.x + self.springNudge, y: self.lastPoint.y)
+            CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left)?
+                .postToPid(dock.processIdentifier)
         }
     }
 

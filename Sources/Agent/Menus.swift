@@ -84,7 +84,7 @@ enum DockMenus {
         guard FolderStore.shared.folder(id: folderID) != nil else { return [] }
         let settings = SettingsController.shared
         return [
-            .action("Edit Folder Name…") { settings.show(folderID: folderID, editingName: true) },
+            .action("Edit Name…") { settings.show(folderID: folderID, editingName: true) },
             .action("Add Apps…") { settings.addApps(to: folderID) },
             .separator,
             .action("Settings…") { settings.show(folderID: folderID) },

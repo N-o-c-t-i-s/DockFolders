@@ -355,7 +355,7 @@ private struct FolderDetailView: View {
         }
     }
 
-    /// "Edit Folder Name…": focus the name with all of it selected, ready to type over.
+    /// "Edit Name…": focus the name with all of it selected, ready to type over.
     /// Otherwise nothing starts out being edited.
     private func takeNameRequest() {
         guard model.editNameOf == folderID else { editingName = false; return }

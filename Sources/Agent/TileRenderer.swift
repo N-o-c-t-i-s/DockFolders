@@ -4,6 +4,11 @@ import SwiftUI
 /// Draws a folder's Dock icon: a translucent glass squircle holding its first four apps (2×2),
 /// laid out on the standard macOS icon grid so it sits naturally next to other Dock icons.
 enum TileRenderer {
+    /// The macOS 26 app icon shape: an 824/1024 square with continuous ("squircle") corners whose
+    /// radius is 26% of its side. Measured from the system's own icons (Notes, Music, Calendar),
+    /// which it matches to within a pixel; Big Sur–era templates used 22.5%.
+    static let iconCornerRatio: CGFloat = 0.26
+
     static func render(apps: [URL], pixelSize: Int = 512, dark: Bool) -> NSBitmapImageRep? {
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: pixelSize, pixelsHigh: pixelSize,
@@ -20,7 +25,7 @@ enum TileRenderer {
         // Icon grid: an 824/1024 squircle centred in the canvas.
         let side = s * 824 / 1024
         let body = CGRect(x: (s - side) / 2, y: (s - side) / 2, width: side, height: side)
-        let squircle = Path(roundedRect: body, cornerRadius: side * 0.225, style: .continuous).cgPath
+        let squircle = Path(roundedRect: body, cornerRadius: side * iconCornerRatio, style: .continuous).cgPath
 
         // Soft drop shadow, like other Dock icons.
         cg.saveGState()
@@ -88,7 +93,7 @@ enum TileRenderer {
         let cg = context.cgContext
         let side = s * 824 / 1024
         let body = CGRect(x: (s - side) / 2, y: (s - side) / 2, width: side, height: side)
-        let squircle = Path(roundedRect: body, cornerRadius: side * 0.225, style: .continuous).cgPath
+        let squircle = Path(roundedRect: body, cornerRadius: side * iconCornerRatio, style: .continuous).cgPath
 
         cg.saveGState()
         cg.setShadow(offset: CGSize(width: 0, height: -s * 0.012), blur: s * 0.03, color: NSColor.black.withAlphaComponent(0.3).cgColor)
