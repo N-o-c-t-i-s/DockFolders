@@ -21,14 +21,15 @@ Settings or Activity Monitor.
 | To | Do this |
 | --- | --- |
 | Make a folder | ⇧ Shift-right-click any app in the Dock → **New Folder with “App”…** (the app moves into it) |
-| Move a Dock app into a folder | Drag it up out of the Dock and let go on the folder's target, or ⇧ Shift-right-click it → **Move “App” to Folder ▸** |
+| Move a Dock app into a folder | Drag it onto the folder and hold it there until the folder opens, then let go (on the folder or inside it), or ⇧ Shift-right-click it → **Move “App” to Folder ▸** |
+| Move an app from a folder to the Dock | Drag it out of the open folder and drop it on the Dock where you want it |
 | Add any app | Drag it from Finder or the Apps window onto the folder in the Dock, or use **+** above the app list in Settings |
-| Open / close a folder | Click it. Move away from it, click outside, press Esc, or launch an app to close it |
+| Open / close a folder | Click it. Move off its sides or top (it closes at once, like moving off the Dock), move away for a moment, click outside, or launch an app to close it |
 | Turn pages | Two-finger swipe, or click the dots |
 | Rearrange apps in a folder | Drag an icon; hold it near the left/right edge to change pages |
 | Name a folder, add/remove/reorder its apps, show/hide it in the Dock, delete it | Right-click the folder → **Open Settings…** (or open Dock Folders from Spotlight) |
 | Take an app out | Right-click it in the folder → Options → **Remove from Folder** or **Move to Dock** |
-| Show names or running dots under apps, change icon size or magnification | Settings → ⚙︎ General → **Inside Folders** |
+| Apps per page (3, 6, 9 or 16), names or running dots under apps, icon size, magnification | Settings → ⚙︎ General → **Inside Folders** |
 | Rearrange folders in the Dock | Drag them like any other Dock icon |
 
 The first launch asks for **Accessibility** access (System Settings → Privacy & Security →
@@ -78,9 +79,14 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   little app runs for a moment, so its tile is an ordinary running app's, which can be kept or let
   go without the Dock's "poof". An app's own tile leaving the Dock gets the Dock's usual poof.
   New folders appear at the end of the Dock's apps.
-- **Dragging an app into a folder.** While you drag an app up out of the Dock, each folder shows a
-  small glass target above it. Let go on one: the Dock takes the tile out (as for any app dragged
-  off) and the app goes into that folder. Dock Folders only watches the drag; the Dock does it.
+- **Dragging an app into a folder.** The Dock owns drags of its tiles (and slides tiles aside to
+  make room), so Dock Folders watches the drag through its event tap and remembers where each
+  folder sat when it started. Hold the app there for a moment and the folder springs open,
+  outlined; let go on the folder or inside it and the app goes in (the Dock removes its tile). A
+  quick pass over a folder doesn't count, so rearranging the Dock works as usual.
+- **Dragging an app out of a folder.** Once the icon is carried past the folder's edge it becomes
+  a real drag of the app, like one from Finder, so the Dock makes room and adds it where you let go.
+  It's offered only as a link, and only over the Dock: let go anywhere else and it slides back.
 - **Saved for a quiet moment.** A few changes still need a restart: new names (the Dock only reads
   names when it starts), moving a new folder into the spot of the app it was made from, and putting
   an app that isn't running back in the Dock. They wait until your Mac locks or its display sleeps,

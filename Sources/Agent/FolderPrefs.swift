@@ -10,6 +10,13 @@ enum FolderPrefs {
         set { defaults.set(newValue, forKey: "showNames") }
     }
 
+    /// How many apps fit on one page of a folder: 3, 6, 9 or 16.
+    static let pageSizes = [3, 6, 9, 16]
+    static var appsPerPage: Int {
+        get { let value = defaults.integer(forKey: "appsPerPage"); return pageSizes.contains(value) ? value : 9 }
+        set { defaults.set(newValue, forKey: "appsPerPage") }
+    }
+
     /// Icon size inside folders, in points. Unset: the same size as the Dock's icons.
     static var customIconSize: CGFloat? {
         get { (defaults.object(forKey: "iconSize") as? NSNumber).map { CGFloat($0.doubleValue) } }

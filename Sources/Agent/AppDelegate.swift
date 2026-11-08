@@ -104,9 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DockMenus.show(DockMenus.appEntries(appURL: url), at: item)
         }
         interceptor.onOutsideClick = { FolderPanelController.shared.close() }
-        interceptor.onAppDragBegan = { DropTargetController.shared.began($0) }
-        interceptor.onAppDragMoved = { DropTargetController.shared.moved(to: $0) }
-        interceptor.onAppDragEnded = { DropTargetController.shared.ended(at: $0) }
+        interceptor.onAppDragBegan = { DockDragCollector.shared.began($0) }
+        interceptor.onAppDragMoved = { DockDragCollector.shared.moved(to: $0) }
+        interceptor.onAppDragEnded = { DockDragCollector.shared.ended(at: $0) }
         interceptor.onMenuOutsideClick = { GlassMenuController.shared.closeAll() }
 
         store.onChange = { [weak self] _ in

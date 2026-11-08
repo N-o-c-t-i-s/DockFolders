@@ -20,6 +20,7 @@ final class SettingsModel: ObservableObject {
 
     // Folder appearance (Settings → General).
     @Published var showsNames = FolderPrefs.showsNames { didSet { FolderPrefs.showsNames = showsNames } }
+    @Published var appsPerPage = FolderPrefs.appsPerPage { didSet { FolderPrefs.appsPerPage = appsPerPage } }
     @Published var iconSize = Double(FolderPrefs.iconSize) {
         didSet { if abs(iconSize - Double(FolderPrefs.iconSize)) > 0.01 { FolderPrefs.customIconSize = CGFloat(iconSize) } }
     }
@@ -59,6 +60,10 @@ final class SettingsModel: ObservableObject {
         dockChangesWaiting = DockSettle.hasPending
         openAtLogin = SMAppService.mainApp.status == .enabled
         if usesDockIconSize { iconSize = Double(FolderPrefs.dockIconSize) }
+        // Options can change outside this window (e.g. `defaults write`); show what's saved.
+        if appsPerPage != FolderPrefs.appsPerPage { appsPerPage = FolderPrefs.appsPerPage }
+        if showsNames != FolderPrefs.showsNames { showsNames = FolderPrefs.showsNames }
+        if magnifies != FolderPrefs.magnifies { magnifies = FolderPrefs.magnifies }
         accessibilityAllowed = AXIsProcessTrusted()
         if case .folder(let id) = selection, folder(id) == nil { selection = folders.first.map { .folder($0.id) } ?? .general }
         if selection == nil { selection = folders.first.map { .folder($0.id) } ?? .general }
@@ -495,6 +500,12 @@ private struct GeneralView: View {
             }
 
             Section {
+                Picker("Apps per page", selection: $model.appsPerPage) {
+                    ForEach(FolderPrefs.pageSizes, id: \.self) { size in
+                        let grid = FolderMetrics.grid(forPageSize: size)
+                        Text("\(size)  (\(grid.columns) × \(grid.rows))").tag(size)
+                    }
+                }
                 Picker("Under each app", selection: $model.showsNames) {
                     Text("Running Indicator").tag(false)
                     Text("Name").tag(true)
@@ -533,7 +544,8 @@ private struct GeneralView: View {
 
             Section("Tips") {
                 Tip(symbol: "cursorarrow.click.2", text: "Click a folder in the Dock to open it; drag icons inside to rearrange them.")
-                Tip(symbol: "square.and.arrow.down", text: "Drag an app from Finder onto a folder in the Dock to add it.")
+                Tip(symbol: "square.and.arrow.down", text: "Drag an app from the Dock onto a folder and hold it there: the folder opens; let go to put the app in. Apps from Finder can go straight onto the folder.")
+                Tip(symbol: "dock.arrow.down.rectangle", text: "Drag an app out of an open folder and onto the Dock to put it back in the Dock.")
                 Tip(symbol: "shift", text: "⇧ Shift-right-click any app in the Dock to start a folder with it.")
             }
 

@@ -6,7 +6,7 @@ import AppKit
 /// • Drag a folder tile       → replayed to the Dock, so tiles can still be rearranged.
 /// • Right-click a folder     → our folder menu.
 /// • ⇧ right-click any app    → "New Folder" / "Add to Folder" menu.
-/// • Drag an app off the Dock → watched (not changed), so folders can show drop targets.
+/// • Drag an app's tile        → watched (not changed), so it can be dropped onto a folder.
 /// • Click anywhere else while a popup is open → close it.
 final class EventInterceptor {
     static let shared = EventInterceptor()
@@ -106,6 +106,25 @@ final class EventInterceptor {
         if event.getIntegerValueField(.eventSourceUserData) == replayMarker { return pass }
 
         let location = event.location
+
+        // An app's tile being dragged: the Dock owns the drag, wherever it goes (even over the
+        // popup); we only watch it.
+        if var drag = appDrag, type == .leftMouseDragged || type == .leftMouseUp {
+            if type == .leftMouseUp {
+                appDrag = nil
+                if drag.active { main { self.onAppDragEnded?(location) } }
+            } else {
+                if !drag.active, hypot(location.x - drag.start.x, location.y - drag.start.y) > 5 {
+                    drag.active = true
+                    appDrag = drag
+                    let item = drag.item
+                    main { self.onAppDragBegan?(item) }
+                }
+                if drag.active { main { self.onAppDragMoved?(location) } }
+            }
+            return pass
+        }
+
         let (panel, menus) = lock.withLock { (panelFrame, menuFrames) }
 
         // While one of our menus is open, a click outside it only dismisses it (like a real menu).
@@ -153,21 +172,8 @@ final class EventInterceptor {
                 }
                 return nil
             }
-            if var drag = appDrag {
-                if !drag.active, hypot(location.x - drag.start.x, location.y - drag.start.y) > 5 {
-                    drag.active = true
-                    appDrag = drag
-                    let item = drag.item
-                    main { self.onAppDragBegan?(item) }
-                }
-                if drag.active { main { self.onAppDragMoved?(location) } }
-            }
 
         case .leftMouseUp:
-            if let drag = appDrag {
-                appDrag = nil
-                if drag.active { main { self.onAppDragEnded?(location) } }
-            }
             if let p = pending {
                 pending = nil
                 main { self.onFolderClick?(p.folderID, p.item) }

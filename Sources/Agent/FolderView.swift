@@ -42,6 +42,11 @@ final class FolderPanelModel: ObservableObject {
     @Published var dragging: (id: String, location: CGPoint)?
     /// Lifted (slightly larger, with a shadow) while held; settles back as it lands.
     @Published var dragLifted = false
+    /// The dragged app has been carried out of the folder (as a real drag the Dock can take);
+    /// its spot stays empty until it comes back or goes into the Dock.
+    @Published var dragOutside = false
+    /// An app dragged from the Dock is over this folder: letting go adds it.
+    @Published var dropTargeted = false
 
     var isSettled: Bool { abs(stripOffset + CGFloat(page) * metrics.bodyWidth) < 0.5 }
 }
@@ -83,9 +88,17 @@ struct FolderMetrics: Equatable {
     /// Space between columns: the Dock's gap, or wider so names fit when they're shown.
     let columnGap: CGFloat
 
-    static let maxColumns = 3
-    static let maxRows = 3
-    static var appsPerPage: Int { maxColumns * maxRows }
+    /// Apps per page → grid: 3 is one row of three, 6 two rows, 9 three, 16 four rows of four.
+    static func grid(forPageSize size: Int) -> (columns: Int, rows: Int) {
+        switch size {
+        case ...3: return (3, 1)
+        case 4...6: return (3, 2)
+        case 7...9: return (3, 3)
+        default: return (4, 4)
+        }
+    }
+
+    var perPage: Int { columns * rows }
     /// Same pointer as the Dock's name label, so the popup sits exactly where that label would.
     static let arrowWidth: CGFloat = 20
     static let arrowHeight: CGFloat = DockLabel.pointerHeight
@@ -95,7 +108,7 @@ struct FolderMetrics: Equatable {
     static let marginBottom: CGFloat = 14
 
     init(iconSize: CGFloat, dockPitch: CGFloat, appCount: Int, minBodyWidth: CGFloat, magnification: CGFloat,
-         showsNames: Bool = false) {
+         showsNames: Bool = false, pageSize: Int = 9) {
         self.iconSize = iconSize
         self.gap = max(2, dockPitch - iconSize)
         self.minBodyWidth = minBodyWidth
@@ -103,11 +116,12 @@ struct FolderMetrics: Equatable {
         self.showsNames = showsNames
         let labelWidth = ceil(max(iconSize * 1.3, iconSize + 18))
         columnGap = showsNames ? max(gap, labelWidth + 4 - iconSize) : gap
-        pages = max(1, Int(ceil(Double(appCount) / Double(Self.appsPerPage))))
-        // Always room for a full page of nine, however many apps the folder has (they fill
-        // from the top left, like an iPhone folder).
-        columns = Self.maxColumns
-        rows = Self.maxRows
+        // Always room for a full page, however many apps the folder has (they fill from the top
+        // left, like an iPhone folder).
+        let grid = Self.grid(forPageSize: pageSize)
+        columns = grid.columns
+        rows = grid.rows
+        pages = max(1, Int(ceil(Double(appCount) / Double(grid.columns * grid.rows))))
     }
 
     /// The icon artwork sits on an 824/1024 grid inside the image.
@@ -153,7 +167,7 @@ struct FolderMetrics: Equatable {
 
     /// Centre of the icon at `index` on its page, in body coordinates.
     func iconCenter(_ index: Int) -> CGPoint {
-        let column = index % Self.maxColumns, row = index / Self.maxColumns
+        let column = index % columns, row = index / columns
         return CGPoint(x: gridInsetX + CGFloat(column) * columnPitch + iconSize / 2,
                        y: padding + CGFloat(row) * rowPitch + iconSize / 2)
     }
@@ -174,10 +188,10 @@ struct FolderMetrics: Equatable {
         let radius = max(columnPitch, rowPitch) * 1.6
         func weight(_ d: CGFloat) -> CGFloat { d < radius ? (cos(d / radius * .pi) + 1) / 2 : 0 }
 
-        let columnCount = min(count, Self.maxColumns)
-        let rowCount = Int(ceil(Double(count) / Double(Self.maxColumns)))
+        let columnCount = min(count, columns)
+        let rowCount = Int(ceil(Double(count) / Double(columns)))
         let columnCenters = (0..<columnCount).map { cellCenter($0).x }
-        let rowCenters = (0..<rowCount).map { cellCenter($0 * Self.maxColumns).y }
+        let rowCenters = (0..<rowCount).map { cellCenter($0 * columns).y }
         let columnWeights = columnCenters.map { weight(abs($0 - pointer.x)) }
         let rowWeights = rowCenters.map { weight(abs($0 - pointer.y)) }
 
@@ -216,7 +230,7 @@ struct FolderMetrics: Equatable {
         let ys = spread(rowCenters, rowWeights, across: columnWeights.max() ?? 0, at: pointer.y,
                         size: cellHeight, gap: gap)
         return (0..<count).map { index in
-            let column = index % Self.maxColumns, row = index / Self.maxColumns
+            let column = index % columns, row = index / columns
             return (CGPoint(x: xs[column], y: ys[row]), 1 + growth * columnWeights[column] * rowWeights[row])
         }
     }
@@ -304,7 +318,7 @@ struct FolderPanelView: View {
                 .padding(.bottom, FolderMetrics.marginBottom)
 
             // The icon being dragged, lifted above everything and free to leave the folder's edges.
-            if let dragging = model.dragging, let app = model.apps.first(where: { $0.id == dragging.id }) {
+            if let dragging = model.dragging, !model.dragOutside, let app = model.apps.first(where: { $0.id == dragging.id }) {
                 Image(nsImage: app.icon)
                     .resizable()
                     .interpolation(.high)
@@ -362,6 +376,9 @@ struct FolderPanelView: View {
         )
         .contentShape(shape)
         .dockGlass(in: shape)
+        // An app dragged from the Dock will drop in here.
+        .overlay(shape.stroke(Color.accentColor, lineWidth: 2.5).opacity(model.dropTargeted ? 0.85 : 0))
+        .animation(.easeOut(duration: 0.15), value: model.dropTargeted)
         // Grows out of its pointer, and shrinks back into the tile when it closes (even while
         // riding down with an auto-hiding Dock).
         .scaleEffect(model.isPresented ? 1 : 0.3, anchor: arrowAnchor(m))
@@ -388,9 +405,10 @@ struct FolderPanelView: View {
     }
 
     private func apps(on page: Int) -> [FolderApp] {
-        let start = page * FolderMetrics.appsPerPage
+        let perPage = model.metrics.perPage
+        let start = page * perPage
         guard start < model.apps.count else { return [] }
-        return Array(model.apps[start..<min(start + FolderMetrics.appsPerPage, model.apps.count)])
+        return Array(model.apps[start..<min(start + perPage, model.apps.count)])
     }
 
     private var arrowEdgeSet: Edge.Set {

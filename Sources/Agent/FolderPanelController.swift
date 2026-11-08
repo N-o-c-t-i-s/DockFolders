@@ -63,6 +63,8 @@ final class FolderPanelController: NSObject {
     /// Whether the pointer has been on the popup or the folder tile since it opened. Until then
     /// (e.g. opened without the mouse), it stays open until dismissed.
     private var pointerEngaged = false
+    /// Whether the pointer was in the popup on the last frame (to tell which edge it left by).
+    private var wasInPopup = false
     /// Until this time, losing the Dock's focus (e.g. hiding the frontmost app activated another
     /// one) re-holds the Dock instead of closing the popup.
     private var keepOpenUntil = Date.distantPast
@@ -75,6 +77,9 @@ final class FolderPanelController: NSObject {
     private var lastWheelStep = Date.distantPast
 
     var isOpen: Bool { folderID != nil }
+
+    /// Sprung open by an app dragged from the Dock: stays open until that drag ends.
+    var heldForDrop = false
 
     private override init() {
         super.init()
@@ -115,9 +120,13 @@ final class FolderPanelController: NSObject {
         model.hovering = false
         model.dragging = nil
         model.dragLifted = false
+        model.dragOutside = false
+        model.dropTargeted = false
+        outsideDrag = nil
         landing = false
         awaySince = nil
         pointerEngaged = false
+        wasInPopup = false
 
         tileItem = item
         tileFrame = item.frame
@@ -152,6 +161,7 @@ final class FolderPanelController: NSObject {
 
     func close(animated: Bool = true) {
         guard isOpen else { return }
+        heldForDrop = false
         // If the pointer isn't on an auto-hiding Dock, the Dock is (about to be) sliding away:
         // go with it, riding down on the tile and fading, rather than shrinking in place.
         let withDock = animated && CoreDock.autoHideEnabled && !isOverDock(NSEvent.mouseLocation)
@@ -262,8 +272,8 @@ final class FolderPanelController: NSObject {
         // Between the Dock and the popup, across the popup's width: on the way in or out.
         let approach = approachZone().contains(mouse)
 
-        let dragging = model.dragging != nil
-        if dragging { checkEdgeDwell() }
+        let dragging = model.dragging != nil || heldForDrop
+        if model.dragging != nil { checkEdgeDwell() }
         updateMagnification(inside: inPopup && !menus && !dragging, mouse: mouse)
 
         // An auto-hiding Dock stays up by itself while the pointer is on it (and keeps
@@ -275,6 +285,15 @@ final class FolderPanelController: NSObject {
                 holdDock()
             }
         }
+
+        // Leaving through the sides or the top is like moving off the Dock: the folder goes at once.
+        // (Through the bottom, back toward the Dock, it lingers as before.)
+        if wasInPopup, !inPopup, !inMenu, !menus, !dragging, !inGracePeriod, !towardDock(mouse) {
+            wasInPopup = false
+            close()
+            return
+        }
+        wasInPopup = inPopup
 
         // Off the Dock and not headed into the popup, with nothing holding the Dock: it's sliding
         // away right now, so close with it instead of lingering above an empty screen edge.
@@ -337,6 +356,15 @@ final class FolderPanelController: NSObject {
         }
     }
 
+    /// Whether a point just outside the popup is on its Dock side.
+    private func towardDock(_ point: CGPoint) -> Bool {
+        switch CoreDock.orientation {
+        case .bottom: return point.y < popupFrame.minY
+        case .left: return point.x < popupFrame.minX
+        case .right: return point.x > popupFrame.maxX
+        }
+    }
+
     private func approachZone() -> CGRect {
         switch CoreDock.orientation {
         case .bottom:
@@ -372,7 +400,7 @@ final class FolderPanelController: NSObject {
     private func beginDrag(_ app: FolderApp, at screenPoint: CGPoint) {
         guard model.dragging == nil, !landing, let index = model.apps.firstIndex(where: { $0.id == app.id }) else { return }
         let point = bodyPoint(screenPoint)
-        let center = model.metrics.iconCenter(index % FolderMetrics.appsPerPage)
+        let center = model.metrics.iconCenter(index % model.metrics.perPage)
         dragGrab = CGSize(width: point.x - center.x, height: point.y - center.y)
         model.dragging = (app.id, center)
         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
@@ -383,7 +411,12 @@ final class FolderPanelController: NSObject {
         // after the icon has moved to another page).
         dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
             guard let self else { return event }
-            if event.type == .leftMouseUp { self.endDrag() } else { self.moveDrag(to: NSEvent.mouseLocation) }
+            if event.type == .leftMouseUp {
+                self.endDrag()
+            } else {
+                self.lastDragEvent = event
+                self.moveDrag(to: NSEvent.mouseLocation)
+            }
             return event
         }
         moveDrag(to: screenPoint)
@@ -399,6 +432,12 @@ final class FolderPanelController: NSObject {
         transaction.disablesAnimations = true
         withTransaction(transaction) { model.dragging = (dragging.id, location) }
 
+        // Carried well out of the folder: it becomes a real drag, which the Dock can take.
+        if isFarOutside(pointer) {
+            handOffToSystemDrag()
+            return
+        }
+
         // Pushed against (or past) the folder's left or right edge: flip pages, like iOS.
         let direction = pointer.x < 4 ? -1 : (pointer.x > m.bodyWidth - 4 ? 1 : 0)
         if direction != edgeDwellDirection { edgeDwellDirection = direction; edgeDwellSince = direction == 0 ? nil : Date() }
@@ -406,9 +445,9 @@ final class FolderPanelController: NSObject {
         // Make room once the icon is clearly over a spot on this page (not while it's between two,
         // so the others don't jitter back and forth).
         guard let from = model.apps.firstIndex(where: { $0.id == dragging.id }), model.isSettled else { return }
-        let pageStart = model.page * FolderMetrics.appsPerPage
-        let onThisPage = from >= pageStart && from < pageStart + FolderMetrics.appsPerPage
-        let slots = min(FolderMetrics.appsPerPage, model.apps.count - pageStart + (onThisPage ? 0 : 1))
+        let pageStart = model.page * m.perPage
+        let onThisPage = from >= pageStart && from < pageStart + m.perPage
+        let slots = min(m.perPage, model.apps.count - pageStart + (onThisPage ? 0 : 1))
         guard slots > 0 else { return }
         func distance(_ slot: Int) -> CGFloat {
             let c = m.iconCenter(slot)
@@ -438,6 +477,92 @@ final class FolderPanelController: NSObject {
         }
     }
 
+    // MARK: Dragging an app out of the folder
+
+    private var lastDragEvent: NSEvent?
+    /// An app carried out of the folder as a real drag, and the folder it came from.
+    private var outsideDrag: (app: FolderApp, folderID: String)?
+    /// Where that drag is (Cocoa screen coordinates).
+    private var outsidePoint: CGPoint = .zero
+
+    /// Past the folder's edge by more than a little (the sides allow room for pushing against
+    /// the edge to turn the page; the Dock side hands over almost at once).
+    private func isFarOutside(_ p: CGPoint) -> Bool {
+        let m = model.metrics
+        let sides: CGFloat = 44, other: CGFloat = 16, toDock: CGFloat = 6
+        let left = CoreDock.orientation == .left ? toDock : sides
+        let right = CoreDock.orientation == .right ? toDock : sides
+        let bottom = CoreDock.orientation == .bottom ? toDock : other
+        return p.x < -left || p.x > m.bodyWidth + right || p.y < -other || p.y > m.bodyHeight + bottom
+    }
+
+    /// Hands the dragged icon over to a real drag of the app (as a link: never a copy or a move of
+    /// the app itself). Over the Dock, the Dock makes room and adds it where it's let go.
+    private func handOffToSystemDrag() {
+        guard let dragging = model.dragging, let event = lastDragEvent, let view = panel.contentView,
+              let folderID, let app = model.apps.first(where: { $0.id == dragging.id }) else { return }
+        if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
+        dragMonitor = nil
+        edgeDwellDirection = 0
+        edgeDwellSince = nil
+        lastDragPoint = nil
+        saveOrder()
+        outsideDrag = (app, folderID)
+        outsidePoint = NSEvent.mouseLocation
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { model.dragOutside = true }
+
+        let size = model.metrics.iconSize * 1.12
+        let p = view.convert(event.locationInWindow, from: nil)
+        let center = CGPoint(x: p.x - dragGrab.width, y: p.y + (view.isFlipped ? -dragGrab.height : dragGrab.height))
+        let item = NSDraggingItem(pasteboardWriter: app.url as NSURL)
+        item.setDraggingFrame(NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size),
+                              contents: app.icon)
+        let session = view.beginDraggingSession(with: [item], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = true
+        session.draggingFormation = .none
+    }
+
+    fileprivate func outsideDragMoved(to point: CGPoint) { outsidePoint = point }
+
+    /// Only a link, and only over the Dock: dropped anywhere else, nothing happens.
+    fileprivate var outsideDragOperations: NSDragOperation { isOverDock(outsidePoint) ? .link : [] }
+
+    fileprivate func finishOutsideDrag(at point: CGPoint, operation: NSDragOperation) {
+        guard let drag = outsideDrag else { return }
+        outsideDrag = nil
+        let url = drag.app.url
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            model.dragOutside = false
+            model.dragging = nil
+            model.dragLifted = false
+        }
+        if !operation.isEmpty {
+            // The Dock took it and made its tile right where it was let go.
+            DockPrefs.noteLivePin(url, tile: DockPrefs.appTile(for: url))
+            FolderActions.moveAppToDock(url, from: drag.folderID)
+        } else if isOverDock(point) {
+            // Let go on the Dock but it didn't take the drop: kept now if it's running, otherwise
+            // added at the next quiet moment.
+            FolderActions.moveAppToDock(url, from: drag.folderID)
+        }
+        // Anywhere else it has slid back into its spot.
+    }
+
+    // MARK: Drops from the Dock
+
+    /// Whether a point (Cocoa screen coordinates) is on the open popup.
+    func popupContains(_ point: CGPoint) -> Bool {
+        isOpen && popupFrame.insetBy(dx: -6, dy: -6).contains(point)
+    }
+
+    func setDropTargeted(_ targeted: Bool) {
+        if model.dropTargeted != targeted { model.dropTargeted = targeted }
+    }
+
     /// True while a dropped icon glides into its spot.
     private var landing = false
 
@@ -454,8 +579,8 @@ final class FolderPanelController: NSObject {
         // hand over to the icon in the grid.
         var target = dragging.location
         if let index = model.apps.firstIndex(where: { $0.id == dragging.id }) {
-            let slot = index - model.page * FolderMetrics.appsPerPage
-            if (0..<FolderMetrics.appsPerPage).contains(slot) { target = model.metrics.iconCenter(slot) }
+            let slot = index - model.page * model.metrics.perPage
+            if (0..<model.metrics.perPage).contains(slot) { target = model.metrics.iconCenter(slot) }
         }
         landing = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
@@ -555,13 +680,14 @@ final class FolderPanelController: NSObject {
         let pitch = icon + dockGap * icon / dockIcon
         let magnification = FolderPrefs.magnificationScale
         let names = FolderPrefs.showsNames
+        let pageSize = FolderPrefs.appsPerPage
         let probe = FolderMetrics(iconSize: icon, dockPitch: pitch, appCount: count,
-                                  minBodyWidth: 0, magnification: magnification, showsNames: names)
+                                  minBodyWidth: 0, magnification: magnification, showsNames: names, pageSize: pageSize)
         // Wide enough that the Dock's name label for this folder hides behind the straight part
         // of the popup's bottom edge.
         let minWidth = DockLabel.width(for: folderName) + probe.cornerRadius * 1.4
         return FolderMetrics(iconSize: icon, dockPitch: pitch, appCount: count,
-                             minBodyWidth: minWidth, magnification: magnification, showsNames: names)
+                             minBodyWidth: minWidth, magnification: magnification, showsNames: names, pageSize: pageSize)
     }
 
     private var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
@@ -699,5 +825,19 @@ final class FolderPanelController: NSObject {
     static func displayName(of url: URL) -> String {
         let name = FileManager.default.displayName(atPath: url.path)
         return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+}
+
+extension FolderPanelController: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .outsideApplication ? outsideDragOperations : []
+    }
+
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        outsideDragMoved(to: screenPoint)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        finishOutsideDrag(at: screenPoint, operation: operation)
     }
 }
