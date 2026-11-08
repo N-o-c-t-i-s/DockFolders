@@ -428,6 +428,11 @@ enum DockSettle {
     /// Everything waiting, in one restart, plus an optional change of the caller's (so a change
     /// that needs a restart anyway takes everything else waiting along with it).
     static func apply(including change: ((inout [[String: Any]]) -> Void)? = nil, then completion: (() -> Void)? = nil) {
+        // Not while the Dock still has a change of its own to save (see DockPrefs.whenDockSaved).
+        DockPrefs.whenDockSaved { applyNow(including: change, then: completion) }
+    }
+
+    private static func applyNow(including change: ((inout [[String: Any]]) -> Void)?, then completion: (() -> Void)?) {
         let renames = FolderActions.takePendingRenames()
         let adds = appsToAdd
         appsToAdd = [:]

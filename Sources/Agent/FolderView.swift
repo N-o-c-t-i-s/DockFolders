@@ -33,6 +33,10 @@ final class FolderPanelModel: ObservableObject {
     @Published var magnificationAmount: CGFloat = 0
     /// Whether the pointer is actually over the popup (names show only then).
     @Published var hovering = false
+    /// The Dock's name label for this folder is showing under the popup's edge (while the pointer
+    /// is on the folder's tile, or while an auto-hiding Dock is held up), and how wide it is.
+    @Published var labelUnderneath = false
+    var labelWidth: CGFloat = 0
 
     var onOpen: (FolderApp) -> Void = { _ in }
     /// Right-click on an app; the point is in screen coordinates.
@@ -310,6 +314,8 @@ struct CalloutShape: Shape {
 
 struct FolderPanelView: View {
     @ObservedObject var model: FolderPanelModel
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         let m = model.metrics
@@ -366,20 +372,12 @@ struct FolderPanelView: View {
         }
         .frame(width: m.bodyWidth, height: m.bodyHeight, alignment: .top)
         .padding(arrowEdgeSet, FolderMetrics.arrowHeight)
-        // The Dock always shows the open folder's name label exactly where the popup's bottom
-        // edge now sits. A soft frost along that edge keeps it from showing through the glass
-        // (the glass rim is drawn on top of it).
-        .background(
-            Rectangle()
-                .fill(.thickMaterial)
-                .mask(LinearGradient(
-                    stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.5), .init(color: .black, location: 1)],
-                    startPoint: frostStart(m), endPoint: frostEnd
-                ))
-                .clipShape(shape)
-        )
+        // While the Dock's name label for this folder sits under the popup's edge, a soft frost
+        // just over it keeps the name from reading through the glass. Everywhere else (and once
+        // the label's gone) it's clear glass over whatever is behind.
+        .background(labelFrost(m).clipShape(shape))
         .contentShape(shape)
-        .dockGlass(in: shape)
+        .dockGlass(in: shape, deepen: false)
         // An app dragged from the Dock will drop in here.
         .overlay(shape.stroke(Color.accentColor, lineWidth: 2.5).opacity(model.dropTargeted ? 0.85 : 0))
         .animation(.easeOut(duration: 0.15), value: model.dropTargeted)
@@ -389,23 +387,35 @@ struct FolderPanelView: View {
         .opacity(model.isPresented ? 1 : 0)
     }
 
-    private func frostStart(_ m: FolderMetrics) -> UnitPoint {
-        let reach: CGFloat = DockLabel.height + DockLabel.pointerHeight + 16
+    /// The Dock draws the folder's name label right under the popup's Dock-side edge (while the
+    /// pointer is on its tile, or while an auto-hiding Dock is held up), and other apps can't hide
+    /// it. Through the glass it's only a soft smudge (light text in Dark Mode, dark in Light
+    /// Mode); a gentle neutral veil over just that spot evens it out. No material here: materials
+    /// pick up the wallpaper's colour and read as a solid patch.
+    private func labelFrost(_ m: FolderMetrics) -> some View {
+        let horizontal = model.arrowEdge == .bottom || model.arrowEdge == .top
+        let along = model.labelWidth + 24
+        let across = DockLabel.height + DockLabel.pointerHeight + 8
+        let size = horizontal ? CGSize(width: along, height: across) : CGSize(width: across, height: along)
+        let total = CGSize(width: m.bodyWidth + (horizontal ? 0 : FolderMetrics.arrowHeight),
+                           height: m.bodyHeight + (horizontal ? FolderMetrics.arrowHeight : 0))
+        let center: CGPoint
         switch model.arrowEdge {
-        case .bottom: return UnitPoint(x: 0.5, y: 1 - reach / (m.bodyHeight + FolderMetrics.arrowHeight))
-        case .top: return UnitPoint(x: 0.5, y: reach / (m.bodyHeight + FolderMetrics.arrowHeight))
-        case .leading: return UnitPoint(x: reach / (m.bodyWidth + FolderMetrics.arrowHeight), y: 0.5)
-        case .trailing: return UnitPoint(x: 1 - reach / (m.bodyWidth + FolderMetrics.arrowHeight), y: 0.5)
+        case .bottom: center = CGPoint(x: model.arrowPosition, y: total.height - size.height / 2)
+        case .top: center = CGPoint(x: model.arrowPosition, y: size.height / 2)
+        case .leading: center = CGPoint(x: size.width / 2, y: model.arrowPosition)
+        case .trailing: center = CGPoint(x: total.width - size.width / 2, y: model.arrowPosition)
         }
-    }
-
-    private var frostEnd: UnitPoint {
-        switch model.arrowEdge {
-        case .bottom: return .bottom
-        case .top: return .top
-        case .leading: return .leading
-        case .trailing: return .trailing
-        }
+        let veil = scheme == .dark ? Color.black.opacity(0.3) : Color.white.opacity(0.4)
+        return Capsule()
+            .fill(veil)
+            .frame(width: size.width, height: size.height)
+            .blur(radius: 10)
+            .position(center)
+            .frame(width: total.width, height: total.height)
+            .opacity(model.labelUnderneath && model.labelWidth > 0 && !reduceTransparency ? 1 : 0)
+            .animation(.easeOut(duration: 0.2), value: model.labelUnderneath)
+            .allowsHitTesting(false)
     }
 
     private func apps(on page: Int) -> [FolderApp] {

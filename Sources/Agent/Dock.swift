@@ -308,12 +308,54 @@ enum DockPrefs {
         let target = normalized(url)
         liveRemoved.removeValue(forKey: target)
         livePinned[target] = (tile, Date())
+        noteDockEdited()
     }
 
     static func noteLiveRemoval(_ url: URL) {
         let target = normalized(url)
         livePinned.removeValue(forKey: target)
         liveRemoved[target] = Date()
+        noteDockEdited()
+    }
+
+    // The Dock saves its list a few seconds after anything changes in it (a tile dragged,
+    // kept or removed). A restart before then would undo that change, or the Dock, quitting
+    // with it unsaved, could write its old list over the one just written. So restarts wait.
+    private static var lastDockEdit = Date.distantPast
+    private static let dockSaveDelay: TimeInterval = 4
+
+    static func noteDockEdited() { lastDockEdit = Date() }
+
+    /// Runs `work` once the Dock has had time to save its latest changes.
+    static func whenDockSaved(_ work: @escaping () -> Void) {
+        let wait = dockSaveDelay - Date().timeIntervalSince(lastDockEdit)
+        if wait <= 0 { work() } else { DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work) }
+    }
+
+    /// Calls back once a restarted Dock (a process other than `oldPID`) is up with its tiles.
+    static func whenDockRestarted(from oldPID: pid_t?, deadline: Date = Date().addingTimeInterval(6),
+                                  then work: @escaping () -> Void) {
+        let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        if let pid, pid != oldPID, !DockAX.shared.items.isEmpty {
+            // Give it a moment to finish adding running apps.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+            return
+        }
+        guard Date() < deadline else { work(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { whenDockRestarted(from: oldPID, deadline: deadline, then: work) }
+    }
+
+    /// Takes every tile of a folder out of `tiles`: its stub, an older stub still waiting for a
+    /// rename, or any tile with its bundle identifier. Returns where the first one was.
+    static func removeFolderTiles(bundleID: String, urls: [URL], from tiles: inout [[String: Any]]) -> Int? {
+        let targets = Set(urls.map(normalized))
+        func belongs(_ tile: [String: Any]) -> Bool {
+            if let p = path(of: tile), targets.contains(p) { return true }
+            return ((tile["tile-data"] as? [String: Any])?["bundle-identifier"] as? String) == bundleID
+        }
+        let first = tiles.firstIndex(where: belongs)
+        tiles.removeAll(where: belongs)
+        return first
     }
 
     /// Drops a live change that didn't happen after all.

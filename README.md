@@ -1,22 +1,79 @@
-# Dock Folders
+<p align="center">
+  <img src="docs/logo.png" width="160" height="160" alt="Dock Folders app icon: four app tiles in a dark rounded square">
+</p>
 
-iPhone-style app folders for the macOS Dock (macOS 26 Tahoe).
+<h1 align="center">Dock Folders</h1>
 
-A folder sits in the Dock like an app. Its icon shows its first four apps (2×2), hovering shows its
-name, and a dot appears under it while any app inside is running. Click it to open a Liquid Glass
-popup: icons at the Dock's size and spacing, 3×3 per page, page dots when there's more than one
-page. The popup sits exactly where the Dock's name label would, rides up and down with the tile as
-the Dock magnifies, and closes on its own once you've moved off it for a moment (riding down and
-shrinking into its tile when the Dock hides). Inside, icons magnify like the Dock; drag one to
-rearrange. While you're in the popup an auto-hiding Dock stays up; it hides again when the folder
-closes. Right-click an app inside a folder for its Dock menu (its name, its windows, Options, Show
-All Windows, Hide, Quit, and ⌥ for Force Quit).
+<p align="center">
+  <b>iPhone-style app folders for the macOS Dock.</b><br>
+  Group your apps into folders right in the Dock, open them in a Liquid Glass popup, and keep your Dock tidy.<br>
+  Free and open source, made for macOS 26 Tahoe.
+</p>
 
-There's no menu bar item. It starts at login and runs in the background; its only window is
-Settings, which opens from a folder's right-click menu or when you open the app again. Quit it from
-Settings or Activity Monitor.
+<p align="center">
+  <a href="https://github.com/myles-dean/DockFolders/releases/latest/download/DockFolders.dmg"><b>⬇︎ Download Dock Folders (DMG)</b></a>
+  &nbsp;·&nbsp; <a href="#features">Features</a>
+  &nbsp;·&nbsp; <a href="#install">Install</a>
+  &nbsp;·&nbsp; <a href="#how-to-use-it">How to use it</a>
+  &nbsp;·&nbsp; <a href="#faq">FAQ</a>
+</p>
 
-## Using it
+<p align="center">
+  <img alt="macOS 26 Tahoe or later" src="https://img.shields.io/badge/macOS-26%20Tahoe%2B-111111?logo=apple&logoColor=white">
+  <img alt="For Macs with Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-native-0a84ff">
+  <img alt="Written in Swift" src="https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-f05138?logo=swift&logoColor=white">
+  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-34c759">
+  <a href="https://github.com/myles-dean/DockFolders/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/myles-dean/DockFolders?label=release"></a>
+</p>
+
+---
+
+**Dock Folders** adds folders to the Mac Dock, the way folders work on an iPhone or iPad. Drag one
+app onto another in the Dock to make a folder; click the folder to open its apps in a Liquid Glass
+popup at the Dock's own icon size. It's a simple way to **organize your Dock**, **group apps in the
+Dock**, and get back the **app folders Launchpad used to have**: macOS 26 Tahoe replaced Launchpad
+with an Apps view that can't keep folders.
+
+No menu bar icon, no screen recording, no network access. It runs quietly in the background and
+starts at login.
+
+## Features
+
+- **Real folders in the Dock.** Each folder is a Dock icon showing its first four apps (2×2), with
+  the Dock's own name label and a running dot while any app inside is open.
+- **Liquid Glass popup.** Click a folder and its apps appear in clear macOS 26 glass, at the Dock's
+  icon size and spacing, with Dock-style magnification. Pages of 3, 6, 9 or 16 apps, with
+  two-finger swipes and page dots.
+- **Drag and drop, like iOS.**
+  - Drag an app onto another app and hold: **Create Folder**, named by category ("Games",
+    "Productivity & Finance", "Creativity"…).
+  - Drag an app onto a folder and hold: the folder springs open and the app goes in.
+  - Drag a folder onto a folder to **merge** them.
+  - Drag an app out of an open folder onto the Dock to put it back.
+- **Right-click menus in glass.** Each app inside a folder gets its Dock menu (windows, Show All
+  Windows, Hide, Quit, Force Quit). Folders get Edit Name, Add Apps, Empty Folder and Settings.
+- **Live Dock changes.** Folders join and leave the Dock without restarting it (no wallpaper or menu
+  bar flash).
+- **Optional: open on hover.** Folders can open when the pointer rests on them.
+- **Optional: open apps only in their folders.** For Macs with System Integrity Protection partly
+  off ([details below](#optional-open-apps-only-in-their-folders)).
+- **Native and accessible.** Light, Dark and tinted appearances; Reduce Transparency makes it
+  solid; works with a Dock on the bottom, left or right, auto-hiding or not.
+
+## Install
+
+1. **[Download DockFolders.dmg](https://github.com/myles-dean/DockFolders/releases/latest/download/DockFolders.dmg)**
+   and drag **Dock Folders** into **Applications**.
+2. Open it. A setup window walks you through two permissions in System Settings → Privacy &
+   Security:
+   - **Accessibility**, so it can see the Dock and open a folder when you click it.
+   - **App Management**, because each folder in the Dock is a small app that Dock Folders makes and
+     updates, and macOS only lets apps change other apps with this permission.
+3. Drag an app onto another app in the Dock and hold it there until **Create Folder** appears.
+
+Requires **macOS 26 Tahoe** or later on a Mac with Apple silicon.
+
+## How to use it
 
 | To | Do this |
 | --- | --- |
@@ -34,22 +91,87 @@ Settings or Activity Monitor.
 | Apps per page (3, 6, 9 or 16), names or running dots under apps, icon size, magnification | Settings → ⚙︎ General → **Inside Folders** |
 | Rearrange folders in the Dock | Drag them like any other Dock icon |
 
-The first launch asks for **Accessibility** access (System Settings → Privacy & Security →
-Accessibility). Dock Folders needs it to see clicks on folder tiles and to keep the Dock open.
 
-## Building
+Settings opens from a folder's right-click menu, or by opening Dock Folders again from Spotlight or
+Applications. Under ⚙︎ General you'll find apps per page, names or running dots under icons, icon
+size, magnification, **Open folders on hover**, and the optional feature below.
+
+## FAQ
+
+**Does Dock Folders change my apps?**
+No. Your apps stay exactly as they are. Each folder is its own tiny app (in
+`~/Library/Application Support/Dock Folders/Folders/`) that sits in the Dock in its place.
+
+**Why does it need App Management?**
+Making, renaming and removing a folder means making and updating that folder's little app, and
+macOS asks before one app changes another. Dock Folders only ever touches its own folder apps.
+
+**Why did macOS say a "Dock tile extension" was added?**
+Each folder's icon is drawn by a small Dock tile plug-in, and macOS announces new ones. Folders
+reuse a few slots, so you'll only see it the first few times.
+
+**Why does the Dock sometimes refresh when my Mac locks?**
+The Dock only reads new names (and apps added back while closed) when it starts, so Dock Folders
+saves those for a moment you won't see it: when your Mac locks or its display sleeps. **Update Now**
+in Settings does it right away.
+
+**Can open apps show only inside their folder, not also on their own?**
+macOS gives every open app its own Dock icon and only lets the Dock itself hide one. Dock Folders
+can do it if you turn part of System Integrity Protection off; see below.
+
+**Does it collect data or use the internet?**
+No. It has no network code at all.
+
+**How do I uninstall it?**
+Right-click each folder → **Empty Folder** to put its apps back in the Dock, quit Dock Folders from
+Settings, then move it to the Trash and delete `~/Library/Application Support/Dock Folders`. If you
+used the optional Dock helper, click **Remove Helper…** in Settings first.
+
+## Optional: open apps only in their folders
+
+**Settings → General → Open apps only in their folders** keeps an open app's own icon out of the
+Dock when the app lives in a folder: it shows only inside its folder, and keeps its menu bar,
+⌘-Tab entry and Force Quit listing. macOS only lets the Dock itself do that, so this needs System
+Integrity Protection partly off, like [yabai](https://github.com/koekeishiya/yabai)'s scripting
+addition. Settings walks you through it:
+
+1. In Recovery, run `csrutil enable --without fs --without debug --without nvram`, then restart.
+2. On Apple silicon, run `sudo nvram boot-args=-arm64e_preview_abi`, then restart again.
+3. Turn the option on. Dock Folders asks for an administrator password once to install a small
+   helper (`/Library/PrivilegedHelperTools/com.mylesdean.DockFolders.helper`, a launchd daemon).
+
+The helper loads `DockFoldersHook.dylib` into the Dock each time it starts. Inside the Dock, it
+stops running-app icons from being added for apps in folders, and hands icons already there to the
+Dock's own "app went into the background" handling. If the Dock keeps quitting right after it
+loads (after a macOS update, say), the helper pauses itself and Settings tells you. Turning the
+option off restarts the Dock without it; **Remove Helper…** uninstalls it. To turn SIP back on,
+run `csrutil enable` in Recovery (and `sudo nvram -d boot-args`).
+
+> [!WARNING]
+> SIP protects your Mac from malware; turning part of it off lowers that protection. This option
+> is experimental: it has been checked against the Dock in macOS 26.6 by reading its code, but not
+> yet run on a Mac with SIP off.
+
+## Building from source
 
 ```bash
+git clone https://github.com/myles-dean/DockFolders.git
+cd DockFolders
 ./build.sh            # builds build/Dock Folders.app
-./build.sh install    # also copies it to /Applications and launches it
+./build.sh install    # also copies it to /Applications and opens it
+./build.sh release    # Developer ID–signed build/DockFolders.dmg (set NOTARY_PROFILE to notarize)
 ```
 
-Requires Xcode 26+ command-line tools. The build signs with your "Apple Development" identity
-when one exists, so the Accessibility permission survives rebuilds.
+Needs the Xcode 26 command-line tools; no Xcode project. Development builds are signed with your
+"Apple Development" identity when there is one, so permissions survive rebuilds.
+
+<details>
+<summary><b>How it works</b> (technical details)</summary>
 
 ## How it works
 
-No screen capturing and no Dock code injection; everything uses system mechanisms.
+No screen capturing, and (unless you turn on the optional feature below) no code inside the Dock:
+everything uses system mechanisms.
 
 - **Folder tiles.** Each folder is a tiny app bundle in
   `~/Library/Application Support/Dock Folders/Folders/`, added to the Dock's own app list.
@@ -69,8 +191,8 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   the Dock the hold is released, so the Dock's own hover and magnification carry on.
 - **Following the tile.** Every frame the popup reads the folder tile's frame and places its
   pointer where the Dock draws that tile's name label (measured: 5 pt pointer, tip 7.5 pt inside
-  the tile's top). That keeps it clear of the Dock and hides the Dock's own label behind it; a
-  frosted strip along the bottom edge stops that label showing through the glass.
+  the tile's top). That keeps it clear of the Dock and hides the Dock's own label behind it (the
+  glass blurs it away; a faint neutral veil evens out what's left).
 - **Empty folders.** Taking the last app out of a folder from the folder itself (dragging it out,
   **Move to Dock** or **Remove from Folder**) deletes the folder, like iOS. Empty folders made or
   emptied in Settings stay, out of the Dock, and join it when their first app is added (unless you
@@ -104,11 +226,13 @@ No screen capturing and no Dock code injection; everything uses system mechanism
   names when it starts) and putting an app that isn't running back in the Dock. They wait until your Mac locks or its display sleeps,
   so you never see the restart; **Update Now** in Settings does it straight away. If Dock Folders
   quits first, it picks pending names up again from the Dock.
-- **Glass finish.** System glass alone renders softer and lighter than the Dock's, so the popup,
-  labels and menus add the Dock's crisp 1 pt rim (brightest along the top) and, in Dark Mode, its
-  deeper tone.
+- **Glass finish.** The popup is clear Liquid Glass over whatever is behind it, with the Dock's
+  crisp 1 pt rim (brightest along the top); labels and menus also take the Dock's deeper tone in
+  Dark Mode. With **Reduce Transparency** on, all of it turns solid, like the rest of macOS.
 - **Menus.** Right-click menus are drawn in Liquid Glass rather than with `NSMenu`, because a
   native menu takes keyboard focus away from the Dock, which then slides away.
+
+</details>
 
 ## Limitations
 
@@ -123,8 +247,8 @@ running inside the Dock, which needs System Integrity Protection turned off):
   plug-in, and macOS announces a new one. Folders reuse a few identifiers ("slots"), so the notice
   only appears the first time a slot is used (about once per folder you keep at the same time),
   not every time you make one.
-- **Open apps also appear in the Dock.** macOS shows every running app there; only the app itself
-  can change that.
+- **Open apps also appear in the Dock**, unless you use the [optional feature](#optional-open-apps-only-in-their-folders). macOS shows every
+  running app there; only the Dock itself can leave one out.
 - **The folder's tile is dimmed while its folder is open** (with an auto-hiding Dock). Keeping the
   Dock up means putting it in its keyboard mode, where it always marks one item: marking the
   folder's tile dims it; marking anything else shows a stray name label.
@@ -138,15 +262,29 @@ running inside the Dock, which needs System Integrity Protection turned off):
 - **App-specific Dock menu items** (Music's playback controls, Notes' New Note) aren't available
   to other apps, so the in-folder menu has the standard items only.
 
-## Layout
+## Project layout
 
 ```
-Sources/Agent/       the background app (event tap, popup, menus, Dock + folder management)
-Sources/Stub/        the per-folder app that sits in the Dock
+Sources/Agent/       the background app (event tap, popup, menus, Dock and folder management)
+Sources/Stub/        the small per-folder app that sits in the Dock
 Sources/TilePlugin/  the Dock tile plug-in that draws a folder's icon
-Sources/Shared/      constants shared by all three
+Sources/DockHook/    the optional Dock helper and payload (SIP partly off only)
+Sources/Shared/      constants shared by the parts above
 Resources/           Info.plists
-build.sh             builds, signs and (optionally) installs
+docs/                images for this page
+build.sh             builds, signs, installs and packages
 ```
 
 Folder data lives in `~/Library/Application Support/Dock Folders/folders.json`.
+
+## Contributing
+
+Issues and pull requests are welcome. Dock Folders leans on how the macOS 26 Dock behaves, so
+reports that include your macOS version and Dock settings (position, auto-hide, magnification)
+help most.
+
+## License
+
+[MIT](LICENSE) © 2026 Myles Dean. The optional Dock helper's loader is adapted from
+[yabai](https://github.com/koekeishiya/yabai) (MIT, © Åsmund Vikane), with its arm64e path based on
+work by [Jeremy Legendre](https://github.com/jslegendre).

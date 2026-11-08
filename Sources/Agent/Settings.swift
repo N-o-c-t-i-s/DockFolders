@@ -15,6 +15,7 @@ final class SettingsModel: ObservableObject {
     @Published var inDock: Set<String> = []
     @Published var openAtLogin = false
     @Published var accessibilityAllowed = false
+    @Published var appManagementAllowed = false
     @Published var selection: SettingsPage?
     @Published var confirmingDelete: Folder?
     /// A folder whose name field should take focus (all selected, ready to type) when shown.
@@ -27,6 +28,7 @@ final class SettingsModel: ObservableObject {
         didSet { if abs(iconSize - Double(FolderPrefs.iconSize)) > 0.01 { FolderPrefs.customIconSize = CGFloat(iconSize) } }
     }
     @Published var magnifies = FolderPrefs.magnifies { didSet { FolderPrefs.magnifies = magnifies } }
+    @Published var opensOnHover = FolderPrefs.opensOnHover { didSet { FolderPrefs.opensOnHover = opensOnHover } }
     @Published var magnification = Double(FolderPrefs.magnification) {
         didSet { FolderPrefs.magnification = CGFloat(magnification) }
     }
@@ -67,6 +69,7 @@ final class SettingsModel: ObservableObject {
         if showsNames != FolderPrefs.showsNames { showsNames = FolderPrefs.showsNames }
         if magnifies != FolderPrefs.magnifies { magnifies = FolderPrefs.magnifies }
         accessibilityAllowed = AXIsProcessTrusted()
+        appManagementAllowed = Permissions.appManagement
         if case .folder(let id) = selection, folder(id) == nil { selection = folders.first.map { .folder($0.id) } ?? .general }
         if selection == nil { selection = folders.first.map { .folder($0.id) } ?? .general }
     }
@@ -499,14 +502,24 @@ private struct GeneralView: View {
             }
             Section {
                 Toggle("Open at login", isOn: Binding(get: { model.openAtLogin }, set: { model.setOpenAtLogin($0) }))
+                Toggle(isOn: $model.opensOnHover) {
+                    Text("Open folders on hover")
+                    Text("A folder opens when the pointer rests on it in the Dock, without a click.")
+                }
                 LabeledContent("Accessibility") {
                     if model.accessibilityAllowed {
                         Label("Allowed", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.secondary)
                     } else {
-                        Button("Open Privacy Settings…") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                        }
+                        Button("Open Privacy Settings…") { Permissions.requestAccessibility() }
+                    }
+                }
+                LabeledContent("App Management") {
+                    if model.appManagementAllowed {
+                        Label("Allowed", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button("Open Privacy Settings…") { Permissions.requestAppManagement() }
                     }
                 }
             }
@@ -553,6 +566,8 @@ private struct GeneralView: View {
                 }
                 .foregroundStyle(.secondary)
             }
+
+            OpenAppsSection()
 
             Section("Tips") {
                 Tip(symbol: "cursorarrow.click.2", text: "Click a folder in the Dock to open it; drag icons inside to rearrange them.")
@@ -607,6 +622,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
 
     func show(folderID: String? = nil, editingName: Bool = false) {
         FolderPanelController.shared.close()
+        Permissions.checkAppManagement()
         model.reload()
         if let folderID, model.folder(folderID) != nil {
             model.selection = .folder(folderID)

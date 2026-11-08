@@ -82,6 +82,9 @@ final class FolderPanelController: NSObject {
 
     /// Sprung open by an app dragged from the Dock: stays open until that drag ends.
     var heldForDrop = false
+    /// Opened by resting the pointer on its tile (Settings → Open folders on hover): it closes
+    /// sooner once the pointer moves on, like the Dock's own hover.
+    var openedByHover = false
     /// After an app was dropped in: stays open (and holds the Dock) a moment so you see it land.
     private var showLandedUntil = Date.distantPast
 
@@ -100,7 +103,12 @@ final class FolderPanelController: NSObject {
     // MARK: Showing
 
     func toggle(folderID: String, item: DockItem?) {
-        if self.folderID == folderID { close(); return }
+        FolderHover.shared.noteOpened(folderID)
+        if self.folderID == folderID {
+            // With hover opening, it's usually open already by the time you click: keep it.
+            if FolderPrefs.opensOnHover { openedByHover = false } else { close() }
+            return
+        }
         show(folderID: folderID, item: item)
     }
 
@@ -116,6 +124,8 @@ final class FolderPanelController: NSObject {
         dockPitch = DockAX.shared.restingPitch()
         let apps = Self.apps(in: folder)
         model.metrics = metrics(for: apps.count, folderName: folder.name)
+        model.labelWidth = DockLabel.width(for: folder.name)
+        model.labelUnderneath = true   // opened from its tile: the Dock is showing its name
         model.apps = apps
         model.page = 0
         model.stripOffset = 0
@@ -131,6 +141,7 @@ final class FolderPanelController: NSObject {
         awaySince = nil
         pointerEngaged = false
         wasInPopup = false
+        openedByHover = false
 
         tileItem = item
         tileFrame = item.frame
@@ -289,6 +300,11 @@ final class FolderPanelController: NSObject {
         let level: NSWindow.Level = overDock && !onTile && !inMenu ? Self.belowDockLabels : .popUpMenu
         if panel.level != level { panel.level = level }
 
+        // The Dock shows the folder's name label while the pointer is on its tile, and keeps it
+        // up while an auto-hiding Dock is held open.
+        let labelShowing = onTile || holdingDock
+        if model.labelUnderneath != labelShowing { model.labelUnderneath = labelShowing }
+
         let dragging = model.dragging != nil || heldForDrop || Date() < showLandedUntil
         if model.dragging != nil { checkEdgeDwell() }
         updateMagnification(inside: inPopup && !menus && !dragging, mouse: mouse)
@@ -325,7 +341,7 @@ final class FolderPanelController: NSObject {
         if inPopup || onTile || approach || inMenu || menus || dragging || !pointerEngaged {
             awaySince = nil
         } else if let since = awaySince {
-            if Date().timeIntervalSince(since) > 0.8, !inGracePeriod { close(); return }
+            if Date().timeIntervalSince(since) > (openedByHover ? 0.3 : 0.8), !inGracePeriod { close(); return }
         } else {
             awaySince = Date()
         }
@@ -552,6 +568,7 @@ final class FolderPanelController: NSObject {
     fileprivate func finishOutsideDrag(at point: CGPoint, operation: NSDragOperation) {
         guard let drag = outsideDrag else { return }
         outsideDrag = nil
+        DockPrefs.noteDockEdited()   // dropped on the Dock: it adds the tile and saves that later
         let url = drag.app.url
         var transaction = Transaction()
         transaction.disablesAnimations = true

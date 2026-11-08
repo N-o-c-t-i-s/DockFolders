@@ -7,13 +7,24 @@ import SwiftUI
 /// System glass alone renders softer and lighter.
 struct DockGlass<S: Shape>: ViewModifier {
     let shape: S
+    /// Deepen the glass to the Dock's own (darker) tone in Dark Mode. Off for the folder popup,
+    /// which stays clear glass over whatever is behind it.
+    var deepen = true
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         content
             // Above the glass, below the content: deepen the glass to the Dock's tone.
             .background(
-                Color.black.opacity(scheme == .dark ? 0.24 : 0)
+                Color.black.opacity(deepen && scheme == .dark ? 0.24 : 0)
+                    .clipShape(shape)
+                    .allowsHitTesting(false)
+            )
+            // Reduce Transparency: solid, like the rest of macOS with that setting.
+            .background(
+                Color(nsColor: .windowBackgroundColor)
+                    .opacity(reduceTransparency ? 1 : 0)
                     .clipShape(shape)
                     .allowsHitTesting(false)
             )
@@ -54,5 +65,5 @@ struct DockGlass<S: Shape>: ViewModifier {
 }
 
 extension View {
-    func dockGlass<S: Shape>(in shape: S) -> some View { modifier(DockGlass(shape: shape)) }
+    func dockGlass<S: Shape>(in shape: S, deepen: Bool = true) -> some View { modifier(DockGlass(shape: shape, deepen: deepen)) }
 }

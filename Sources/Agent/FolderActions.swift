@@ -21,7 +21,7 @@ enum FolderActions {
             try StubManager.install(folder)
         } catch {
             store.delete(folder.id)
-            Prompt.error("Couldn’t create the folder.", error)
+            stubFailed("Couldn’t create the folder.", error)
             return
         }
         takeFromOtherFolders(apps, except: folder.id)
@@ -77,7 +77,7 @@ enum FolderActions {
             try StubManager.install(folder)
         } catch {
             store.delete(folder.id)
-            Prompt.error("Couldn’t create the folder.", error)
+            stubFailed("Couldn’t create the folder.", error)
             return
         }
         takeFromOtherFolders(apps, except: folder.id)
@@ -129,7 +129,7 @@ enum FolderActions {
         DockSettle.forget(folder.id)
         NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
         DockLive.unpinFolder(folder, tileURL: tileURL) { ok in
-            if !ok { DockPrefs.modify { _ in } }
+            if !ok { DockPrefs.whenDockSaved { DockPrefs.modify { _ in } } }
             if let oldStub, oldStub.path != folder.stubURL.path { removeStub(at: oldStub) }
             EventInterceptor.shared.update(folders: store.folders)
             NotificationCenter.default.post(name: FolderStore.didChange, object: nil)
@@ -176,22 +176,42 @@ enum FolderActions {
         let tileURL = dockURL(for: folder)
         let apps = folder.appURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
         StubManager.busy.insert(folder.id)
-        StubManager.stopIndicator(folder)
         let oldStub = pendingRenames.removeValue(forKey: folderID)
+        var stubURLs = [folder.stubURL]
+        for url in [tileURL, oldStub].compactMap({ $0 }) where !stubURLs.contains(url) { stubURLs.append(url) }
         store.delete(folderID)   // gone from Settings at once
         DockSettle.forget(folderID)
         EventInterceptor.shared.update(folders: store.folders)
+        // Its stub (running while an app inside is open) must be gone first: one still running
+        // when the Dock restarts comes back as a running tile, a "?" once its file is deleted.
+        StubManager.quit(folder) {
+            putAppsBack(from: folder, apps: apps, stubURLs: stubURLs, retry: true)
+        }
+    }
+
+    /// One restart that swaps the folder's tile for its apps; then checks it took (the Dock can
+    /// write its old list back as it quits) and tidies anything left before deleting the stub.
+    private static func putAppsBack(from folder: Folder, apps: [URL], stubURLs: [URL], retry: Bool) {
+        var dockPID: pid_t?
         DockSettle.apply(including: { tiles in
+            dockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+            let index = DockPrefs.removeFolderTiles(bundleID: folder.bundleIdentifier, urls: stubURLs, from: &tiles)
             let appTiles = apps.filter { DockPrefs.index(of: $0, in: tiles) == nil }.map(DockPrefs.appTile(for:))
-            if let index = DockPrefs.index(of: tileURL, in: tiles) {
-                tiles.replaceSubrange(index...index, with: appTiles)
-            } else {
-                tiles.append(contentsOf: appTiles)
-            }
+            tiles.insert(contentsOf: appTiles, at: min(index ?? tiles.count, tiles.count))
         }, then: {
-            if let oldStub, oldStub.path != folder.stubURL.path { removeStub(at: oldStub) }
-            StubManager.remove(folder)
-            StubManager.busy.remove(folder.id)
+            DockPrefs.whenDockRestarted(from: dockPID) {
+                let appsMissing = apps.contains { !DockPrefs.savedContains($0) }
+                let folderLeft = stubURLs.contains(where: DockPrefs.savedContains)
+                if retry, appsMissing || folderLeft {
+                    putAppsBack(from: folder, apps: apps, stubURLs: stubURLs, retry: false)
+                    return
+                }
+                // Still showing a tile for the folder? Take it out before its stub goes.
+                for url in stubURLs where DockAX.shared.item(for: url) != nil { _ = DockLive.unpinApp(at: url) }
+                for url in stubURLs where url.path != folder.stubURL.path { removeStub(at: url) }
+                StubManager.remove(folder)
+                StubManager.busy.remove(folder.id)
+            }
         })
     }
 
@@ -291,7 +311,9 @@ enum FolderActions {
             if running {
                 // Its tile is already showing; just keep it (silent).
                 DockPrefs.noteLivePin(url, tile: DockPrefs.appTile(for: url))
-                if !DockLive.pinRunningApp(at: url) { DockPrefs.modify { _ in } }
+                let pin = { if !DockLive.pinRunningApp(at: url) { DockPrefs.whenDockSaved { DockPrefs.modify { _ in } } } }
+                // With open apps kept in their folders, the Dock only now gives it its tile back.
+                if OpenAppsInFolders.isActive { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: pin) } else { pin() }
             } else {
                 // Only a restart can add a tile for an app that isn't open: save it for a quiet moment.
                 DockSettle.addApp(url, near: folderID)
@@ -336,6 +358,16 @@ enum FolderActions {
     }
 
     /// The stub the folder's Dock tile currently points at.
+    /// Making a folder's app failed: usually because App Management is off, which the setup
+    /// window explains (and lets you turn on); anything else, say so.
+    static func stubFailed(_ title: String, _ error: Error) {
+        if !Permissions.checkAppManagement() {
+            OnboardingController.shared.show()
+        } else {
+            Prompt.error(title, error)
+        }
+    }
+
     static func dockURL(for folder: Folder) -> URL { pendingRenames[folder.id] ?? folder.stubURL }
 
     static func rename(_ folderID: String, to newName: String) {
@@ -357,7 +389,7 @@ enum FolderActions {
         do {
             try StubManager.install(renamed)
         } catch {
-            Prompt.error("Couldn’t rename the folder.", error)
+            stubFailed("Couldn’t rename the folder.", error)
             return
         }
         // A stub from an earlier rename that never reached the Dock can go right away.
@@ -449,7 +481,7 @@ enum FolderActions {
             try StubManager.install(folder)
         } catch {
             store.delete(folder.id)
-            Prompt.error("Couldn’t create the folder.", error)
+            stubFailed("Couldn’t create the folder.", error)
             return nil
         }
         EventInterceptor.shared.update(folders: store.folders)

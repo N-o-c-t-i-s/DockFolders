@@ -62,6 +62,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 continue
             }
+            if url.host == "test-close" { FolderPanelController.shared.close(); OnboardingController.shared.dismiss(); continue }
+            if url.host == "test-onboarding" { OnboardingController.shared.show(); continue }
+            if url.host == "test-show", let id = items.first(where: { $0.name == "id" })?.value {
+                FolderPanelController.shared.show(folderID: id, item: nil)
+                continue
+            }
+            if url.host == "test-unpin" {
+                for path in items.filter({ $0.name == "path" }).compactMap(\.value) {
+                    DockPrefs.noteLiveRemoval(URL(fileURLWithPath: path))
+                    _ = DockLive.unpinApp(at: URL(fileURLWithPath: path))
+                }
+                continue
+            }
             if url.host == "test-empty", let id = items.first(where: { $0.name == "id" })?.value {
                 FolderActions.emptyFolder(id)
                 continue
@@ -146,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onChange = { [weak self] _ in
             EventInterceptor.shared.update(folders: FolderStore.shared.folders)
             self?.refreshRunningDots()
+            OpenAppsInFolders.syncList()
         }
     }
 
@@ -183,6 +197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Folder tiles get the Dock's running dot while any app inside is running.
         RunningApps.shared.start()
+        FolderHover.shared.update()
+        OpenAppsInFolders.start()
         NotificationCenter.default.addObserver(forName: RunningApps.didChange, object: nil, queue: .main) { [weak self] _ in
             self?.refreshRunningDots()
         }
@@ -216,8 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startWhenTrusted() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        if AXIsProcessTrustedWithOptions(options) {
+        // A permission missing (always, on a fresh install): walk through turning them on.
+        if !Permissions.accessibility || !Permissions.checkAppManagement() {
+            OnboardingController.shared.show()
+        }
+        if Permissions.accessibility {
             start()
             return
         }
@@ -232,7 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         EventInterceptor.shared.start()
         if !UserDefaults.standard.bool(forKey: welcomedKey) {
             UserDefaults.standard.set(true, forKey: welcomedKey)
-            SettingsController.shared.show()
+            // The setup window opens Settings itself when you're done with it.
+            if !OnboardingController.shared.isShowing { SettingsController.shared.show() }
         }
     }
 

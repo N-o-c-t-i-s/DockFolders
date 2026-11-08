@@ -145,6 +145,21 @@ enum StubManager {
         NSRunningApplication.runningApplications(withBundleIdentifier: folder.bundleIdentifier).forEach { $0.terminate() }
     }
 
+    /// Quits the folder's stub and calls back once it's gone (forcing it near the end of `wait`).
+    /// A stub still running when the Dock restarts comes back as a running tile.
+    static func quit(_ folder: Folder, wait: TimeInterval = 2, then done: @escaping () -> Void) {
+        let deadline = Date().addingTimeInterval(wait)
+        func check() {
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: folder.bundleIdentifier)
+                .filter { !$0.isTerminated }
+            guard !running.isEmpty, Date() < deadline else { done(); return }
+            let force = deadline.timeIntervalSinceNow < 0.7
+            running.forEach { _ = force ? $0.forceTerminate() : $0.terminate() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: check)
+        }
+        check()
+    }
+
     // MARK: - Helpers
 
     private static func editPlist(_ url: URL, _ edit: (inout [String: Any]) -> Void) throws {

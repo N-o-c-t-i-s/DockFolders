@@ -49,6 +49,7 @@ final class DockDragCollector {
     // MARK: Drag (from the event tap, on the main thread)
 
     func began(_ item: DockItem) {
+        DockPrefs.noteDockEdited()   // the Dock may move or drop this tile, and saves that later
         dragged = item
         let path = item.url?.standardizedFileURL.resolvingSymlinksInPath().path
         draggedFolderID = FolderStore.shared.folders.first {
@@ -116,6 +117,7 @@ final class DockDragCollector {
     }
 
     func ended(at point: CGPoint) {
+        DockPrefs.noteDockEdited()
         let panel = FolderPanelController.shared
         let url = dragged?.url
         let open = openFolderID

@@ -10,6 +10,12 @@ enum FolderPrefs {
         set { defaults.set(newValue, forKey: "showNames") }
     }
 
+    /// Folders open when the pointer rests on them in the Dock, not only when clicked. Off by default.
+    static var opensOnHover: Bool {
+        get { defaults.bool(forKey: "openOnHover") }
+        set { defaults.set(newValue, forKey: "openOnHover"); FolderHover.shared.update() }
+    }
+
     /// How many apps fit on one page of a folder: 3, 6, 9 or 16.
     static let pageSizes = [3, 6, 9, 16]
     static var appsPerPage: Int {

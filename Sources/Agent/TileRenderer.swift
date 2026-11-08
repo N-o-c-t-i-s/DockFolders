@@ -80,7 +80,61 @@ enum TileRenderer {
         render(apps: apps, pixelSize: pixelSize, dark: dark)?.representation(using: .png, properties: [:])
     }
 
-    /// The Dock Folders app icon: a dark glass squircle with four coloured mini tiles.
+    /// The app icon from artwork (Resources/AppIcon.png): its visible square is fitted to the
+    /// macOS 26 icon grid (824 of 1024) and shape, with the standard drop shadow, so it sits like
+    /// any other app's icon. Without artwork, a generated one.
+    static func renderAppIcon(pixelSize: Int, artwork: CGImage?) -> NSBitmapImageRep? {
+        guard let artwork else { return renderAppIcon(pixelSize: pixelSize) }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: pixelSize, pixelsHigh: pixelSize,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        let s = CGFloat(pixelSize)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        let cg = context.cgContext
+        cg.interpolationQuality = .high
+        let side = s * 824 / 1024
+        let body = CGRect(x: (s - side) / 2, y: (s - side) / 2, width: side, height: side)
+        let squircle = Path(roundedRect: body, cornerRadius: side * iconCornerRatio, style: .continuous).cgPath
+
+        cg.saveGState()
+        cg.setShadow(offset: CGSize(width: 0, height: -s * 0.012), blur: s * 0.03, color: NSColor.black.withAlphaComponent(0.3).cgColor)
+        cg.addPath(squircle)
+        cg.setFillColor(NSColor.black.cgColor)
+        cg.fillPath()
+        cg.restoreGState()
+
+        cg.saveGState()
+        cg.addPath(squircle)
+        cg.clip()
+        let art = opaqueBounds(of: artwork).flatMap { artwork.cropping(to: $0) } ?? artwork
+        cg.draw(art, in: body)
+        cg.restoreGState()
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
+
+    /// The part of an image that isn't transparent (top-left origin, as `cropping(to:)` wants).
+    private static func opaqueBounds(of image: CGImage) -> CGRect? {
+        let w = image.width, h = image.height
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w where pixels[(y * w + x) * 4 + 3] > 16 {
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
+    /// The generated Dock Folders app icon: a dark glass squircle with four coloured mini tiles.
     static func renderAppIcon(pixelSize: Int) -> NSBitmapImageRep? {
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: pixelSize, pixelsHigh: pixelSize,
@@ -126,10 +180,12 @@ enum TileRenderer {
         return rep
     }
 
-    static func writeAppIcon(to url: URL) {
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "com.apple.icns" as CFString, 5, nil) else { return }
-        for size in [16, 32, 128, 256, 512] {
-            if let image = renderAppIcon(pixelSize: size)?.cgImage { CGImageDestinationAddImage(destination, image, nil) }
+    static func writeAppIcon(to url: URL, artwork artworkURL: URL? = nil) {
+        let artwork = artworkURL.flatMap { NSImage(contentsOf: $0) }?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        let sizes = [16, 32, 64, 128, 256, 512, 1024]
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "com.apple.icns" as CFString, sizes.count, nil) else { return }
+        for size in sizes {
+            if let image = renderAppIcon(pixelSize: size, artwork: artwork)?.cgImage { CGImageDestinationAddImage(destination, image, nil) }
         }
         CGImageDestinationFinalize(destination)
     }
