@@ -9,8 +9,9 @@ private let log = Logger(subsystem: "com.mylesdean.DockFolders", category: "Dock
 /// instead of rewriting its settings and restarting it: a restart redraws the wallpaper and the
 /// menu bar, which everyone sees. The Dock's menu shows for a moment while an item is pressed.
 ///
-/// Folder tiles come and go silently: the folder's own little app runs for a moment, so its tile
-/// is an ordinary running app's, which can be kept or let go without the Dock's "poof".
+/// Folder tiles join silently: the folder's own little app runs for a moment, so its tile is an
+/// ordinary running app's, which "Keep in Dock" keeps. They leave with "Remove from Dock" (and the
+/// Dock's poof); letting an open app's tile go instead would show its running dot first.
 enum DockLive {
     private static let dockBundle = Bundle(path: "/System/Library/CoreServices/Dock.app")
 
@@ -210,12 +211,30 @@ enum DockLive {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { check() }
     }
 
-    /// Takes a folder's tile out of the Dock without the poof: its stub runs, stops being kept,
-    /// and quits, and the tile slides away like any app that quits.
+    /// Takes a folder's tile out of the Dock with "Remove from Dock" (the Dock's poof). If its stub
+    /// is running (as the folder's running indicator) it's quit first, so the tile is a plain kept
+    /// tile again; the stub is never started for this, so no running dot shows on the way out.
     static func unpinFolder(_ folder: Folder, tileURL: URL, completion: @escaping (Bool) -> Void) {
-        withStub(at: tileURL, folder: folder, quitAfter: true, completion: completion) { tile in
-            setKept(false, tile: tile)
+        StubManager.busy.insert(folder.id)
+        stubs(at: tileURL, folder).forEach { $0.terminate() }
+        let deadline = Date().addingTimeInterval(2)
+        func attempt(_ triesLeft: Int) {
+            let tile = DockAX.shared.item(for: tileURL)
+            let stillRunning = !stubs(at: tileURL, folder).isEmpty
+                || (tile.map { (AX.value($0.element, "AXIsApplicationRunning") as Bool?) == true } ?? false)
+            if stillRunning, Date() < deadline {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { attempt(triesLeft) }
+                return
+            }
+            guard tile != nil else { StubManager.busy.remove(folder.id); completion(true); return }   // already gone
+            if unpinApp(at: tileURL) || triesLeft <= 1 {
+                StubManager.busy.remove(folder.id)
+                completion(DockAX.shared.item(for: tileURL) == nil || triesLeft > 1)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { attempt(triesLeft - 1) }
         }
+        attempt(3)
     }
 
     /// Runs the stub at `url` until the Dock shows it as a running app, does `work` on its tile,

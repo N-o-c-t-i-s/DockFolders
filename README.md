@@ -76,10 +76,10 @@ No screen capturing and no Dock code injection; everything uses system mechanism
 - **Changing the Dock without restarting it.** Restarting the Dock redraws the wallpaper and the
   menu bar, so Dock Folders avoids it. It changes the Dock through the Dock's own right-click menu
   instead (**Options ▸ Keep in Dock / Remove from Dock**, pressed through Accessibility, in the
-  Mac's language); the menu shows for a moment. Folder tiles come and go silently: the folder's
-  little app runs for a moment, so its tile is an ordinary running app's, which can be kept or let
-  go without the Dock's "poof". An app's own tile leaving the Dock gets the Dock's usual poof.
-  New folders appear at the end of the Dock's apps.
+  Mac's language); the menu shows for a moment. Folder tiles join silently: the folder's
+  little app runs for a moment, so its tile is an ordinary running app's, which **Keep in Dock**
+  keeps. Tiles leave with **Remove from Dock** and the Dock's usual poof (letting a running tile
+  go instead would show a running dot first). New folders appear at the end of the Dock's apps.
 - **Dragging an app into a folder.** The Dock owns drags of its tiles (and slides tiles aside to
   make room), so Dock Folders watches the drag through its event tap and remembers where each
   folder sat when it started. Hold the app there for a moment and the folder springs open,
