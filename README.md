@@ -27,6 +27,10 @@
 </p>
 
 <p align="center">
+  <a href="https://ko-fi.com/mylesdean_"><img alt="Buy me a coffee on Ko-fi" src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white"></a>
+</p>
+
+<p align="center">
   <img src="docs/demo.gif" width="872" alt="Dock Folders demo: the pointer moves to the Dock, hovers the Utilities folder and clicks it, and a Liquid Glass popup opens above it showing eight apps">
 </p>
 
