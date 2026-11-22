@@ -191,6 +191,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 FolderStore.shared.folders.forEach(StubManager.refreshTile)
             }
         }
+        // ChatGPT can select its Dock icon from inside the app. Refresh the closed folder images
+        // and an open folder only after that app has saved the new preference.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.openai.codex.DockIconPreferenceChanged"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.075) {
+                FolderStore.shared.folders.forEach(StubManager.refreshTile)
+                FolderPanelController.shared.reload()
+            }
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
             EventInterceptor.shared.updateScreens()
             FolderPanelController.shared.close(animated: false)

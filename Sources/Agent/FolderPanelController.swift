@@ -711,7 +711,7 @@ final class FolderPanelController: NSObject {
         for url in urls where !folder.apps.contains(url.path) && FileManager.default.fileExists(atPath: url.path)
             && !apps.contains(where: { $0.url.path == url.path }) {
             apps.append(FolderApp(url: url, name: Self.displayName(of: url),
-                                  icon: NSWorkspace.shared.icon(forFile: url.path), isRunning: false, isPreview: true))
+                                  icon: AppIconResolver.icon(for: url), isRunning: false, isPreview: true))
         }
         let url = apps.first(where: \.isPreview)?.url
         let m = metrics(for: apps.count, folderName: folder.name)
@@ -1015,7 +1015,7 @@ final class FolderPanelController: NSObject {
         return folder.appURLs.compactMap { url in
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             return FolderApp(url: url, name: displayName(of: url),
-                             icon: NSWorkspace.shared.icon(forFile: url.path),
+                             icon: AppIconResolver.icon(for: url),
                              isRunning: running.contains(url.standardizedFileURL.path))
         }
     }

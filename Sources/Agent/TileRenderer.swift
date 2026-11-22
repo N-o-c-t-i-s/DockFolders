@@ -77,7 +77,7 @@ enum TileRenderer {
             guard index < layout.displayedAppCount, index < apps.count else { continue }
             let url = apps[index]
             // App icons include the standard transparent margin; enlarge so the artwork fills the slot.
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            let icon = AppIconResolver.icon(for: url)
             let expansion = rect.width * 0.1215
             icon.draw(
                 in: rect.insetBy(dx: -expansion, dy: -expansion),

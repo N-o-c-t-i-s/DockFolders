@@ -536,7 +536,7 @@ private struct AppRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+            Image(nsImage: AppIconResolver.icon(for: url))
                 .resizable()
                 .frame(width: 26, height: 26)
             Text(FolderPanelController.displayName(of: url))
