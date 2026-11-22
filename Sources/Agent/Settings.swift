@@ -23,7 +23,20 @@ final class SettingsModel: ObservableObject {
 
     // Folder appearance (Settings → General).
     @Published var showsNames = FolderPrefs.showsNames { didSet { FolderPrefs.showsNames = showsNames } }
-    @Published var appsPerPage = FolderPrefs.appsPerPage { didSet { FolderPrefs.appsPerPage = appsPerPage } }
+    @Published var appsPerPage = FolderPrefs.appsPerPage {
+        didSet {
+            guard oldValue != appsPerPage else { return }
+            FolderPrefs.appsPerPage = appsPerPage
+            StubManager.refreshAllTiles()
+        }
+    }
+    @Published var dockIconDisplayMode = FolderPrefs.dockIconDisplayMode {
+        didSet {
+            guard oldValue != dockIconDisplayMode else { return }
+            FolderPrefs.dockIconDisplayMode = dockIconDisplayMode
+            StubManager.refreshAllTiles()
+        }
+    }
     @Published var iconSize = Double(FolderPrefs.iconSize) {
         didSet { if abs(iconSize - Double(FolderPrefs.iconSize)) > 0.01 { FolderPrefs.customIconSize = CGFloat(iconSize) } }
     }
@@ -66,6 +79,7 @@ final class SettingsModel: ObservableObject {
         if usesDockIconSize { iconSize = Double(FolderPrefs.dockIconSize) }
         // Options can change outside this window (e.g. `defaults write`); show what's saved.
         if appsPerPage != FolderPrefs.appsPerPage { appsPerPage = FolderPrefs.appsPerPage }
+        if dockIconDisplayMode != FolderPrefs.dockIconDisplayMode { dockIconDisplayMode = FolderPrefs.dockIconDisplayMode }
         if showsNames != FolderPrefs.showsNames { showsNames = FolderPrefs.showsNames }
         if magnifies != FolderPrefs.magnifies { magnifies = FolderPrefs.magnifies }
         accessibilityAllowed = AXIsProcessTrusted()
@@ -81,9 +95,22 @@ final class SettingsModel: ObservableObject {
         return nil
     }
 
+    /// A representative folder for the General page's live Dock-icon preview.
+    var dockIconPreviewFolder: Folder? {
+        if let selectedFolder, !selectedFolder.apps.isEmpty { return selectedFolder }
+        return folders.filter { !$0.apps.isEmpty }.max { $0.apps.count < $1.apps.count }
+            ?? folders.first
+    }
+
     func tileImage(_ folder: Folder, size: Int = 128) -> NSImage {
         let image = NSImage(size: NSSize(width: size / 2, height: size / 2))
-        if let rep = TileRenderer.render(apps: folder.appURLs, pixelSize: size, dark: StubManager.isDarkMode) {
+        if let rep = TileRenderer.render(
+            apps: folder.appURLs,
+            pixelSize: size,
+            dark: StubManager.isDarkMode,
+            displayMode: dockIconDisplayMode,
+            preferredColumns: FolderMetrics.grid(forPageSize: appsPerPage).columns
+        ) {
             image.addRepresentation(rep)
         }
         return image
@@ -121,6 +148,36 @@ final class SettingsModel: ObservableObject {
     }
 }
 
+private extension DockIconDisplayMode {
+    var settingsTitle: String {
+        switch self {
+        case .preview: return "First 4 apps"
+        case .cappedGrid: return "Grid up to 16"
+        case .all: return "Show every app"
+        }
+    }
+
+    var settingsDescription: String {
+        switch self {
+        case .preview:
+            return "Shows the first four apps in a 2 × 2 grid."
+        case .cappedGrid:
+            return "Shows up to 16 apps. Larger folders use a +N badge."
+        case .all:
+            return "Shows every app without a badge."
+        }
+    }
+
+    func settingsColumnsDescription(openFolderColumns: Int) -> String {
+        switch self {
+        case .preview:
+            return "Always 2 columns"
+        case .cappedGrid, .all:
+            return "Uses the same \(openFolderColumns) columns as the open folder."
+        }
+    }
+}
+
 // MARK: - Layout
 
 struct SettingsView: View {
@@ -143,9 +200,6 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
             }
-            // Starts just under the window buttons rather than below a full toolbar's height.
-            .safeAreaPadding(.top, 38)
-            .ignoresSafeArea(.container, edges: .top)
             .safeAreaInset(edge: .bottom, spacing: 0) { AddRemoveBar(model: model) }
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 280)
             .toolbar(removing: .sidebarToggle)
@@ -159,10 +213,8 @@ struct SettingsView: View {
                 }
             }
             .frame(minWidth: 380)
-            // The toolbar strip is empty, so pages start up beside the window buttons.
-            .ignoresSafeArea(.container, edges: .top)
         }
-        // The sidebar runs the full height under the window buttons; no title in the toolbar.
+        // The native titlebar owns the drag region above the navigation content.
         .toolbar(removing: .title)
         .frame(minWidth: 640, idealWidth: 700, minHeight: 440, idealHeight: 520)
         .alert(
@@ -342,12 +394,11 @@ private struct FolderDetailView: View {
                         .help("Add Apps")
                     }
                 } footer: {
-                    Text("Drag to reorder. The first four show on the folder’s icon.")
+                    Text(dockIconFooter(for: folder))
                         .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
-            .contentMargins(.top, 0, for: .scrollContent)
             .onAppear {
                 DispatchQueue.main.async { takeNameRequest() }
             }
@@ -370,6 +421,21 @@ private struct FolderDetailView: View {
     private func trimmed() -> String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private func isEdited(_ folder: Folder) -> Bool { !trimmed().isEmpty && trimmed() != folder.name }
+
+    private func dockIconFooter(for folder: Folder) -> String {
+        switch model.dockIconDisplayMode {
+        case .preview:
+            return "Drag to reorder. The first four show on the folder’s Dock icon."
+        case .cappedGrid where folder.apps.count > DockIconGridLayout.cappedSlotCount:
+            let visible = DockIconGridLayout.cappedAppCount
+            let overflow = folder.apps.count - visible
+            return "Drag to reorder. The first \(visible) show, followed by a +\(overflow) badge on the folder’s Dock icon."
+        case .cappedGrid:
+            return "Drag to reorder. All apps show on the folder’s Dock icon."
+        case .all:
+            return "Drag to reorder. Every app shows on the folder’s Dock icon at the open folder’s column count."
+        }
+    }
 
     private func save() {
         guard let folder = model.folder(folderID), isEdited(folder) else { return }
@@ -531,6 +597,41 @@ private struct GeneralView: View {
                         Text("\(size)  (\(grid.columns) × \(grid.rows))").tag(size)
                     }
                 }
+                Picker("Dock icon", selection: $model.dockIconDisplayMode) {
+                    ForEach(DockIconDisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.settingsTitle).tag(mode)
+                    }
+                }
+                HStack(spacing: 12) {
+                    if let folder = model.dockIconPreviewFolder {
+                        Image(nsImage: model.tileImage(folder, size: 160))
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 68, height: 68)
+                            .accessibilityLabel("Dock icon preview")
+                    } else {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(.quaternary)
+                            .frame(width: 68, height: 68)
+                            .overlay {
+                                Image(systemName: "square.grid.3x3")
+                                    .font(.title2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityLabel("Dock icon preview")
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Dock icon preview")
+                        Text(model.dockIconDisplayMode.settingsDescription)
+                        Text(
+                            model.dockIconDisplayMode.settingsColumnsDescription(
+                                openFolderColumns: FolderMetrics.grid(forPageSize: model.appsPerPage).columns
+                            )
+                        )
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 Picker("Under each app", selection: $model.showsNames) {
                     Text("Running Indicator").tag(false)
                     Text("Name").tag(true)
@@ -634,13 +735,15 @@ final class SettingsController: NSObject, NSWindowDelegate {
             let window = NSWindow(contentViewController: host)
             window.title = "Dock Folders"   // for the Window menu; not shown
             window.titleVisibility = .hidden
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            // Keep SwiftUI content below the native titlebar so form controls never overlap its
+            // drag region.
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.titlebarAppearsTransparent = true
-            // An (empty) toolbar is what lets the sidebar run the full height, under the window buttons.
             window.toolbar = NSToolbar(identifier: "DockFoldersSettings")
             window.toolbarStyle = .unified
             window.setContentSize(NSSize(width: 700, height: 520))
             window.isReleasedWhenClosed = false
+            window.isMovableByWindowBackground = false
             window.delegate = self
             window.center()
             window.setFrameAutosaveName("DockFoldersSettings2")

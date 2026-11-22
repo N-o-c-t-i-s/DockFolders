@@ -23,6 +23,22 @@ enum FolderPrefs {
         set { defaults.set(newValue, forKey: "appsPerPage") }
     }
 
+    private static let dockIconDisplayModeKey = "dockIconDisplayMode"
+
+    /// How apps are arranged on a folder's closed Dock tile.
+    static var dockIconDisplayMode: DockIconDisplayMode {
+        get {
+            let rawValue = defaults.string(forKey: dockIconDisplayModeKey)
+            return rawValue.flatMap(DockIconDisplayMode.init(rawValue:)) ?? .cappedGrid
+        }
+        set { defaults.set(newValue.rawValue, forKey: dockIconDisplayModeKey) }
+    }
+
+    /// The open folder's column count, also used by its closed Dock icon.
+    static var folderGridColumns: Int {
+        FolderMetrics.grid(forPageSize: appsPerPage).columns
+    }
+
     /// Icon size inside folders, in points. Unset: the same size as the Dock's icons.
     static var customIconSize: CGFloat? {
         get { (defaults.object(forKey: "iconSize") as? NSNumber).map { CGFloat($0.doubleValue) } }

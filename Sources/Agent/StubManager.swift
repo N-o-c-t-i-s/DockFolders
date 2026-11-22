@@ -3,6 +3,8 @@ import AppKit
 /// Builds the small per-folder apps that live in the Dock, and keeps their tile images current.
 enum StubManager {
     private static let classPlaceholder = "DFTile_ZZZZZZZZZZZZZZZZ"
+    private static var allTilesRefreshGeneration = 0
+    private static var allTilesRefreshDelay: DispatchWorkItem?
 
     static var templateURL: URL {
         Bundle.main.resourceURL!.appendingPathComponent("FolderStub.app", isDirectory: true)
@@ -56,8 +58,13 @@ enum StubManager {
         }
         try data.write(to: binary)
 
-        TileRenderer.writeICNS(apps: folder.appURLs, dark: isDarkMode,
-                               to: contents.appendingPathComponent("Resources/AppIcon.icns"))
+        TileRenderer.writeICNS(
+            apps: folder.appURLs,
+            dark: isDarkMode,
+            displayMode: FolderPrefs.dockIconDisplayMode,
+            preferredColumns: FolderPrefs.folderGridColumns,
+            to: contents.appendingPathComponent("Resources/AppIcon.icns")
+        )
 
         // Ad-hoc sign the inner plug-in, then the app.
         try codesign(plugin)
@@ -108,11 +115,43 @@ enum StubManager {
     /// Re-renders the folder's tile image and tells its Dock plug-in to redraw.
     static func refreshTile(_ folder: Folder) {
         try? FileManager.default.createDirectory(at: DFShared.tilesDirectory, withIntermediateDirectories: true)
-        if let png = TileRenderer.pngData(apps: folder.appURLs, pixelSize: 512, dark: isDarkMode) {
+        if let png = TileRenderer.pngData(
+            apps: folder.appURLs,
+            pixelSize: 1024,
+            dark: isDarkMode,
+            displayMode: FolderPrefs.dockIconDisplayMode,
+            preferredColumns: FolderPrefs.folderGridColumns
+        ) {
             try? png.write(to: DFShared.tileImageURL(for: folder.tileKey), options: .atomic)
         }
         DistributedNotificationCenter.default().postNotificationName(
             DFShared.tileChangedNotification, object: folder.tileKey, userInfo: nil, deliverImmediately: true)
+    }
+
+    /// Refreshes every folder after a setting that changes the miniature grid. Picker changes can
+    /// arrive in quick succession, so debounce them and render one tile per run-loop turn.
+    static func refreshAllTiles() {
+        allTilesRefreshGeneration += 1
+        allTilesRefreshDelay?.cancel()
+        let generation = allTilesRefreshGeneration
+        let work = DispatchWorkItem {
+            refreshAllTiles(generation: generation, index: 0)
+        }
+        allTilesRefreshDelay = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private static func refreshAllTiles(generation: Int, index: Int) {
+        guard generation == allTilesRefreshGeneration else { return }
+        let folders = FolderStore.shared.folders
+        guard folders.indices.contains(index) else {
+            allTilesRefreshDelay = nil
+            return
+        }
+        refreshTile(folders[index])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            refreshAllTiles(generation: generation, index: index + 1)
+        }
     }
 
     /// Whether any app in the folder is running.

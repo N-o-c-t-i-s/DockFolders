@@ -47,11 +47,13 @@ starts at login.
 
 ## Features
 
-- **Real folders in the Dock.** Each folder is a Dock icon showing its first four apps (2×2), with
-  the Dock's own name label and a running dot while any app inside is open.
+- **Real folders in the Dock.** Each folder is a Dock icon showing its apps in a miniature grid,
+  with the Dock's own name label and a running dot while any app inside is open.
 - **Liquid Glass popup.** Click a folder and its apps appear in clear macOS 26 glass, at the Dock's
   icon size and spacing, with Dock-style magnification. Pages of 3, 6, 9 or 16 apps, with
   two-finger swipes and page dots.
+- **Stable popup anchor under native Dock magnification.** The real folder icon shrinks with the
+  Dock exactly as macOS draws it, while the popup keeps its magnified position.
 - **Drag and drop, like iOS.**
   - Drag an app onto another app and hold: **Create Folder**, named by category ("Games",
     "Productivity & Finance", "Creativity"…).
@@ -97,14 +99,14 @@ Requires **macOS 26 Tahoe** or later on a Mac with Apple silicon.
 | Move a Dock app into a folder | Drag it onto the folder and hold it there until the folder opens, then let go (on the folder or inside it). An app lives in one folder at a time, so this moves it out of any other |
 | Move an app from a folder to the Dock | Drag it out of the open folder and drop it on the Dock where you want it |
 | Add any app | Drag it from Finder or the Apps window onto the folder in the Dock, or use **+** above the app list in Settings |
-| Open / close a folder | Click it. Move off its sides or top (it closes at once, like moving off the Dock), move away for a moment, click outside, or launch an app to close it |
+| Open / close a folder | Click it. Move away for a moment, click outside, or launch an app to close it |
 | Turn pages | Two-finger swipe, or click the dots |
 | Rearrange apps in a folder | Drag an icon; hold it near the left/right edge to change pages |
 | Rename a folder, add apps | Right-click the folder → **Edit Name…** (opens Settings with the name ready to type) or **Add Apps…** (opens Settings with the app picker) |
 | Put a folder's apps back in the Dock | Right-click the folder → **Empty Folder** (the apps take the folder's place and the folder goes; one Dock refresh, since closed apps can only be added to the Dock that way) |
 | Remove/reorder apps, show/hide a folder in the Dock, delete it, options | Right-click the folder → **Settings…** (or open Dock Folders from Spotlight) |
 | Take an app out | Right-click it in the folder → Options → **Remove from Folder** or **Move to Dock** |
-| Apps per page (3, 6, 9 or 16), names or running dots under apps, icon size, magnification | Settings → ⚙︎ General → **Inside Folders** |
+| Apps per page and Dock icon grid, names or running dots under apps, icon size, magnification | Settings → ⚙︎ General → **Inside Folders** |
 | Rearrange folders in the Dock | Drag them like any other Dock icon |
 
 
@@ -192,7 +194,7 @@ everything uses system mechanisms.
 - **Folder tiles.** Each folder is a tiny app bundle in
   `~/Library/Application Support/Dock Folders/Folders/`, added to the Dock's own app list.
   Its icon is drawn by a **Dock tile plug-in** (`NSDockTilePlugIn`, the mechanism Calendar uses for
-  its date), so the 2×2 icon updates live. The agent renders the tile image; the plug-in shows it.
+  its date), so the grid icon updates live. The agent renders the tile image; the plug-in shows it.
   macOS only loads a third-party Dock plug-in after the app has been launched once, so each new
   stub is launched once, invisibly, with `--register`.
 - **Clicks.** A Quartz event tap sees clicks on folder tiles before the Dock does and opens the
@@ -205,10 +207,11 @@ everything uses system mechanisms.
   put into its keyboard-focus state through Accessibility. That holds an auto-hiding Dock on
   screen without turning auto-hide off, which would resize full-screen and tiled windows. Back on
   the Dock the hold is released, so the Dock's own hover and magnification carry on.
-- **Following the tile.** Every frame the popup reads the folder tile's frame and places its
-  pointer where the Dock draws that tile's name label (measured: 5 pt pointer, tip 7.5 pt inside
-  the tile's top). That keeps it clear of the Dock and hides the Dock's own label behind it (the
-  glass blurs it away; a faint neutral veil evens out what's left).
+- **Following the tile.** The popup reads the live folder-tile frame for hit-testing and Dock
+  holding. Once the Dock starts shrinking its real icon, the popup freezes only its own
+  fully magnified anchor, then catches up when the native tile returns to that size. Its pointer
+  remains where the Dock draws the tile's name label (measured: 5 pt pointer, tip 7.5 pt inside
+  the tile's top).
 - **Empty folders.** Taking the last app out of a folder from the folder itself (dragging it out,
   **Move to Dock** or **Remove from Folder**) deletes the folder, like iOS. Empty folders made or
   emptied in Settings stay, out of the Dock, and join it when their first app is added (unless you

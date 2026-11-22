@@ -35,7 +35,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" \
 # Changes to the stub or plug-in make the agent rebuild existing folder stubs on next launch
 # (which restarts the Dock, so only real changes should). Bump STUB_BUILD when the way they're
 # built changes; other edits to this script don't count.
-STUB_BUILD=1
+STUB_BUILD=2
 TEMPLATE_HASH=$( (cat Sources/Shared/*.swift Sources/Stub/*.swift Sources/TilePlugin/*.swift \
                     Resources/Stub-Info.plist Resources/TilePlugin-Info.plist; echo "$STUB_BUILD") | shasum -a 256 | cut -c1-16)
 

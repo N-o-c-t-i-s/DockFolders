@@ -6,9 +6,6 @@ import AppKit
 final class FolderHover {
     static let shared = FolderHover()
 
-    /// How long the pointer rests on a folder before it opens.
-    private static let delay: TimeInterval = 0.3
-
     private var monitor: Any?
     private var localMonitor: Any?
     private var timer: Timer?
@@ -47,7 +44,10 @@ final class FolderHover {
     private func moved() {
         guard timer == nil, nearDock(NSEvent.mouseLocation) else { return }
         // Near the Dock: check what's under the pointer a few times a second until it leaves.
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.check() }
+        timer = Timer.scheduledTimer(
+            withTimeInterval: FolderPopupMotion.hoverPollInterval,
+            repeats: true
+        ) { [weak self] _ in self?.check() }
         check()
     }
 
@@ -76,7 +76,8 @@ final class FolderHover {
             hovered = (folderID, Date(), panel.folderID == folderID)
             return
         }
-        guard !current.opened, Date().timeIntervalSince(current.since) >= Self.delay else { return }
+        guard !current.opened,
+              Date().timeIntervalSince(current.since) >= FolderPopupMotion.hoverOpenDelay else { return }
         hovered?.opened = true
         guard panel.folderID != folderID else { return }
         panel.show(folderID: folderID, item: item)

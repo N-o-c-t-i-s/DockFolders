@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Draws a folder's Dock icon: a translucent glass squircle holding its first four apps (2×2),
+/// Draws a folder's Dock icon: a translucent glass squircle holding a miniature app grid,
 /// laid out on the standard macOS icon grid so it sits naturally next to other Dock icons.
 enum TileRenderer {
     /// The macOS 26 app icon shape: an 824/1024 square with continuous ("squircle") corners whose
@@ -9,7 +9,13 @@ enum TileRenderer {
     /// which it matches to within a pixel; Big Sur–era templates used 22.5%.
     static let iconCornerRatio: CGFloat = 0.26
 
-    static func render(apps: [URL], pixelSize: Int = 512, dark: Bool) -> NSBitmapImageRep? {
+    static func render(
+        apps: [URL],
+        pixelSize: Int = 512,
+        dark: Bool,
+        displayMode: DockIconDisplayMode,
+        preferredColumns: Int
+    ) -> NSBitmapImageRep? {
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: pixelSize, pixelsHigh: pixelSize,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -55,29 +61,76 @@ enum TileRenderer {
         cg.strokePath()
         cg.restoreGState()
 
-        // 2×2 mini icons.
-        let padding = side * 0.13
-        let gap = side * 0.075
-        let slot = (side - padding * 2 - gap) / 2
-        for (index, url) in apps.prefix(4).enumerated() {
-            let column = CGFloat(index % 2)
-            let row = CGFloat(index / 2)
-            let rect = CGRect(
-                x: body.minX + padding + column * (slot + gap),
-                y: body.maxY - padding - slot - row * (slot + gap),
-                width: slot, height: slot
-            )
+        let layout = DockIconGridLayout.make(
+            appCount: apps.count,
+            preferredColumns: preferredColumns,
+            displayMode: displayMode,
+            in: body
+        )
+        for (index, rect) in layout.slots.enumerated() {
+            if layout.isOverflowSlot(index) {
+                drawOverflowBadge(layout.overflowLabel ?? "", in: rect, dark: dark)
+                continue
+            }
+            guard index < layout.displayedAppCount, index < apps.count else { continue }
+            let url = apps[index]
             // App icons include the standard transparent margin; enlarge so the artwork fills the slot.
             let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.draw(in: rect.insetBy(dx: -slot * 0.1215, dy: -slot * 0.1215), from: .zero, operation: .sourceOver, fraction: 1)
+            let expansion = rect.width * 0.1215
+            icon.draw(
+                in: rect.insetBy(dx: -expansion, dy: -expansion),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
         }
 
         NSGraphicsContext.restoreGraphicsState()
         return rep
     }
 
-    static func pngData(apps: [URL], pixelSize: Int = 512, dark: Bool) -> Data? {
-        render(apps: apps, pixelSize: pixelSize, dark: dark)?.representation(using: .png, properties: [:])
+    private static func drawOverflowBadge(_ label: String, in rect: CGRect, dark: Bool) {
+        let radius = rect.width * 0.22
+        let badge = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        NSColor.black.withAlphaComponent(dark ? 0.56 : 0.34).setFill()
+        badge.fill()
+        NSColor.white.withAlphaComponent(dark ? 0.34 : 0.52).setStroke()
+        badge.lineWidth = max(1, rect.width * 0.025)
+        badge.stroke()
+
+        let fontSize = max(rect.width * 0.32, 1)
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white.withAlphaComponent(0.96),
+            .paragraphStyle: paragraph
+        ]
+        let textSize = (label as NSString).size(withAttributes: attributes)
+        let textRect = CGRect(
+            x: rect.minX,
+            y: rect.midY - textSize.height / 2,
+            width: rect.width,
+            height: textSize.height
+        )
+        (label as NSString).draw(in: textRect, withAttributes: attributes)
+    }
+
+    static func pngData(
+        apps: [URL],
+        pixelSize: Int = 512,
+        dark: Bool,
+        displayMode: DockIconDisplayMode,
+        preferredColumns: Int
+    ) -> Data? {
+        render(
+            apps: apps,
+            pixelSize: pixelSize,
+            dark: dark,
+            displayMode: displayMode,
+            preferredColumns: preferredColumns
+        )?.representation(using: .png, properties: [:])
     }
 
     /// The app icon from artwork (Resources/AppIcon.png): its visible square is fitted to the
@@ -191,10 +244,28 @@ enum TileRenderer {
     }
 
     /// Writes an .icns (used by Finder, and by the Dock before the plug-in has drawn).
-    static func writeICNS(apps: [URL], dark: Bool, to url: URL) {
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "com.apple.icns" as CFString, 5, nil) else { return }
-        for size in [16, 32, 128, 256, 512] {
-            if let image = render(apps: apps, pixelSize: size, dark: dark)?.cgImage {
+    static func writeICNS(
+        apps: [URL],
+        dark: Bool,
+        displayMode: DockIconDisplayMode,
+        preferredColumns: Int,
+        to url: URL
+    ) {
+        let sizes = [16, 32, 128, 256, 512]
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL,
+            "com.apple.icns" as CFString,
+            sizes.count,
+            nil
+        ) else { return }
+        for size in sizes {
+            if let image = render(
+                apps: apps,
+                pixelSize: size,
+                dark: dark,
+                displayMode: displayMode,
+                preferredColumns: preferredColumns
+            )?.cgImage {
                 CGImageDestinationAddImage(destination, image, nil)
             }
         }

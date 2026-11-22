@@ -316,6 +316,7 @@ struct FolderPanelView: View {
     @ObservedObject var model: FolderPanelModel
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let m = model.metrics
@@ -381,9 +382,11 @@ struct FolderPanelView: View {
         // An app dragged from the Dock will drop in here.
         .overlay(shape.stroke(Color.accentColor, lineWidth: 2.5).opacity(model.dropTargeted ? 0.85 : 0))
         .animation(.easeOut(duration: 0.15), value: model.dropTargeted)
-        // Grows out of its pointer, and shrinks back into the tile when it closes (even while
-        // riding down with an auto-hiding Dock).
-        .scaleEffect(model.isPresented ? 1 : 0.3, anchor: arrowAnchor(m))
+        // Settles out of the callout arrow with a short slide and subtle scale. Reduce Motion
+        // keeps the popup in place and only changes its opacity.
+        .scaleEffect(model.isPresented || reduceMotion ? 1 : FolderPopupMotion.closedScale,
+                     anchor: arrowAnchor(m))
+        .offset(presentationOffset)
         .opacity(model.isPresented ? 1 : 0)
     }
 
@@ -442,6 +445,19 @@ struct FolderPanelView: View {
         case .top: return UnitPoint(x: model.arrowPosition / w, y: 0)
         case .leading: return UnitPoint(x: 0, y: model.arrowPosition / h)
         case .trailing: return UnitPoint(x: 1, y: model.arrowPosition / h)
+        }
+    }
+
+    /// The closed state moves a short distance toward the callout arrow. Reduce Motion keeps the
+    /// popup in place and only fades it.
+    private var presentationOffset: CGSize {
+        guard !model.isPresented, !reduceMotion else { return .zero }
+        let distance = FolderPopupMotion.slideDistance
+        switch model.arrowEdge {
+        case .bottom: return CGSize(width: 0, height: distance)
+        case .top: return CGSize(width: 0, height: -distance)
+        case .leading: return CGSize(width: -distance, height: 0)
+        case .trailing: return CGSize(width: distance, height: 0)
         }
     }
 }

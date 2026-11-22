@@ -33,6 +33,16 @@ final class FolderPanel: NSPanel {
 final class FolderPanelController: NSObject {
     static let shared = FolderPanelController()
 
+    private struct ScreenConfiguration: Equatable {
+        let frames: [CGRect]
+        let scales: [CGFloat]
+
+        init(screens: [NSScreen] = NSScreen.screens) {
+            frames = screens.map(\.frame)
+            scales = screens.map(\.backingScaleFactor)
+        }
+    }
+
     private let model = FolderPanelModel()
     private lazy var panel: FolderPanel = {
         let panel = FolderPanel()
@@ -49,9 +59,17 @@ final class FolderPanelController: NSObject {
     private var displayLink: CADisplayLink?
     private var frameCount = 0
 
-    /// The folder's Dock tile, and its latest (possibly magnified) frame in AX coordinates.
+    /// The folder's Dock tile and the live frame used for hit-testing and Dock holding.
     private var tileItem: DockItem?
-    private var tileFrame: CGRect = .zero
+    private var liveTileFrame: CGRect = .zero
+    /// The popup anchor stays frozen until the live tile restores its magnified size.
+    private var frozenTileState = FrozenTileAnchorState()
+    private var frozenTileFrame: CGRect? { frozenTileState.frozenTileFrame }
+    private var liveTileMissingCount = 0
+    private var dockPID: pid_t?
+    private var openedOrientation = CoreDock.orientation
+    private var openedScreens: ScreenConfiguration?
+    private var magnificationEnabled = DockGeometry.dockMagnifies
     /// The Dock bar (AX list) frame, in Cocoa coordinates; refreshed a few times a second.
     private var barFrame: CGRect = .zero
     /// Where the popup currently is (Cocoa): glass including its pointer, and the body alone.
@@ -65,8 +83,6 @@ final class FolderPanelController: NSObject {
     /// Whether the pointer has been on the popup or the folder tile since it opened. Until then
     /// (e.g. opened without the mouse), it stays open until dismissed.
     private var pointerEngaged = false
-    /// Whether the pointer was in the popup on the last frame (to tell which edge it left by).
-    private var wasInPopup = false
     /// Until this time, losing the Dock's focus (e.g. hiding the frontmost app activated another
     /// one) re-holds the Dock instead of closing the popup.
     private var keepOpenUntil = Date.distantPast
@@ -85,6 +101,8 @@ final class FolderPanelController: NSObject {
     /// Opened by resting the pointer on its tile (Settings → Open folders on hover): it closes
     /// sooner once the pointer moves on, like the Dock's own hover.
     var openedByHover = false
+    /// Identifies the current presentation so stale close timers cannot order out a newer popup.
+    private var presentationGeneration = 0
     /// After an app was dropped in: stays open (and holds the Dock) a moment so you see it land.
     private var showLandedUntil = Date.distantPast
 
@@ -117,6 +135,7 @@ final class FolderPanelController: NSObject {
               let item = item ?? DockAX.shared.item(for: FolderActions.dockURL(for: folder)) else { return }
         if isOpen { close(animated: false) }
         stopFollowingTile()
+        presentationGeneration &+= 1
         // Clicking a Dock icon closes any Dock menu that's open; so does opening a folder.
         DockAX.shared.dismissMenus()
 
@@ -140,11 +159,16 @@ final class FolderPanelController: NSObject {
         landing = false
         awaySince = nil
         pointerEngaged = false
-        wasInPopup = false
         openedByHover = false
 
         tileItem = item
-        tileFrame = item.frame
+        liveTileFrame = item.frame
+        frozenTileState.reset(bestOnTileFrame: item.frame)
+        liveTileMissingCount = 0
+        dockPID = dockProcessIdentifier()
+        openedOrientation = CoreDock.orientation
+        openedScreens = ScreenConfiguration()
+        magnificationEnabled = DockGeometry.dockMagnifies
         refreshBarFrame()
         // Opened without the pointer on the Dock (e.g. from the stub): hold it right away.
         if CoreDock.autoHideEnabled, !isOverDock(NSEvent.mouseLocation) { holdDock() }
@@ -155,7 +179,7 @@ final class FolderPanelController: NSObject {
         panel.alphaValue = 1
         panel.orderFrontRegardless()
         DispatchQueue.main.async {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { self.model.isPresented = true }
+            withAnimation(FolderPopupMotion.animation) { self.model.isPresented = true }
         }
         startWatching()
     }
@@ -181,11 +205,17 @@ final class FolderPanelController: NSObject {
     }
 
     func close(animated: Bool = true) {
-        guard isOpen else { return }
+        guard isOpen else {
+            clearFrozenTile()
+            return
+        }
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
         heldForDrop = false
         // If the pointer isn't on an auto-hiding Dock, the Dock is (about to be) sliding away:
         // go with it, riding down on the tile and fading, rather than shrinking in place.
         let withDock = animated && CoreDock.autoHideEnabled && !isOverDock(NSEvent.mouseLocation)
+        clearFrozenTile()
         folderID = nil
         GlassMenuController.shared.closeAll()
         stopWatching(keepFollowingTile: withDock)
@@ -195,24 +225,28 @@ final class FolderPanelController: NSObject {
             model.isPresented = false
             panel.orderOut(nil)
         } else if withDock {
-            leavingUntil = Date().addingTimeInterval(0.28)
-            withAnimation(.easeIn(duration: 0.22)) {
+            let duration = FolderPopupMotion.animationDuration
+            leavingUntil = Date().addingTimeInterval(duration)
+            withAnimation(FolderPopupMotion.animation) {
                 model.isPresented = false
                 model.magnificationAmount = 0
                 model.hovering = false
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { [weak self] in
-                guard let self, !self.isOpen else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                guard let self, !self.isOpen,
+                      self.presentationGeneration == generation else { return }
                 self.stopFollowingTile()
                 self.panel.orderOut(nil)
             }
         } else {
-            withAnimation(.easeIn(duration: 0.13)) {
+            let duration = FolderPopupMotion.animationDuration
+            withAnimation(FolderPopupMotion.animation) {
                 model.isPresented = false
                 model.pointer = nil
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                guard let self, !self.isOpen else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                guard let self, !self.isOpen,
+                      self.presentationGeneration == generation else { return }
                 self.panel.orderOut(nil)
             }
         }
@@ -226,6 +260,10 @@ final class FolderPanelController: NSObject {
         leavingUntil = nil
         displayLink?.invalidate()
         displayLink = nil
+    }
+
+    private func clearFrozenTile() {
+        frozenTileState.reset()
     }
 
     // MARK: Holding the Dock
@@ -264,40 +302,123 @@ final class FolderPanelController: NSObject {
         if !isOpen {
             guard let until = leavingUntil, Date() < until, let tile = tileItem else { return }
             let frame = AX.frame(tile.element)
-            if frame.width > 0 { tileFrame = frame; position() }
+            if frame.width > 0 { liveTileFrame = frame; position() }
             return
         }
         frameCount += 1
 
-        if let tile = tileItem {
-            let frame = AX.frame(tile.element)
-            if frame.width > 0 {
-                tileFrame = frame
-            } else if frameCount % 30 == 0, let folder = folderID.flatMap(FolderStore.shared.folder(id:)) {
-                tileItem = DockAX.shared.item(for: FolderActions.dockURL(for: folder))   // the Dock restarted
+        let runningDockPID = dockProcessIdentifier()
+        if dockPID != runningDockPID {
+            dockPID = runningDockPID
+            holdingDock = false
+            DockAX.shared.reset()
+            clearFrozenTile()
+        }
+        let orientation = CoreDock.orientation
+        if orientation != openedOrientation {
+            openedOrientation = orientation
+            clearFrozenTile()
+        }
+        if frameCount % 15 == 0 {
+            let screens = ScreenConfiguration()
+            if screens != openedScreens {
+                openedScreens = screens
+                clearFrozenTile()
             }
         }
+        if frameCount % 30 == 0 {
+            magnificationEnabled = DockGeometry.dockMagnifies
+        }
+        if !magnificationEnabled {
+            clearFrozenTile()
+        }
+
+        let hasLiveFrame = refreshLiveTileFrame()
+        guard isOpen else { return }
         if frameCount % 10 == 0 { refreshBarFrame() }
+        if hasLiveFrame {
+            updateFrozenTileAnchor(at: NSEvent.mouseLocation)
+        }
         position()
         trackPointer()
     }
 
+    @discardableResult
+    private func refreshLiveTileFrame() -> Bool {
+        if let tile = tileItem {
+            let frame = AX.frame(tile.element)
+            if frame.width > 0, frame.height > 0 {
+                liveTileFrame = frame
+                liveTileMissingCount = 0
+                return true
+            }
+        }
+
+        liveTileMissingCount += 1
+        if liveTileMissingCount > 45 {
+            clearFrozenTile()
+            close(animated: false)
+            return false
+        }
+        guard frameCount % 30 == 0,
+              let folder = folderID.flatMap(FolderStore.shared.folder(id:)) else {
+            return false
+        }
+
+        tileItem = DockAX.shared.item(for: FolderActions.dockURL(for: folder))
+        guard let tileItem else { return false }
+        liveTileFrame = tileItem.frame
+        guard liveTileFrame.width > 0, liveTileFrame.height > 0 else { return false }
+        liveTileMissingCount = 0
+        return true
+    }
+
+    private func updateFrozenTileAnchor(at mouse: CGPoint) {
+        guard magnificationEnabled, liveTileFrame.width > 0, liveTileFrame.height > 0 else {
+            clearFrozenTile()
+            return
+        }
+        let orientation = CoreDock.orientation
+        let onTile = cocoa(liveTileFrame).insetBy(dx: -2, dy: -2).contains(mouse)
+        let inPopup = popupFrame.insetBy(
+            dx: -FolderPopupMotion.popupHitPadding,
+            dy: -FolderPopupMotion.popupHitPadding
+        ).contains(mouse)
+        let approach = approachZone().contains(mouse)
+        let inMenu = GlassMenuController.shared.isOpen || GlassMenuController.shared.contains(mouse)
+        let dragging = model.dragging != nil || heldForDrop || Date() < showLandedUntil
+        let engaged = inPopup || approach || inMenu || dragging
+
+        _ = frozenTileState.update(
+            liveTileFrame: liveTileFrame,
+            isOnLiveTile: onTile,
+            isEngaged: engaged,
+            orientation: orientation
+        )
+    }
+
     private func trackPointer() {
         let mouse = NSEvent.mouseLocation
-        let tile = cocoa(tileFrame)
+        let tile = cocoa(liveTileFrame)
         let menus = GlassMenuController.shared.isOpen
         let inMenu = GlassMenuController.shared.contains(mouse)
-        let inPopup = popupFrame.insetBy(dx: -3, dy: -3).contains(mouse)
+        let inPopup = popupFrame.insetBy(
+            dx: -FolderPopupMotion.popupHitPadding,
+            dy: -FolderPopupMotion.popupHitPadding
+        ).contains(mouse)
+        let overPopupBody = popupFrame.contains(mouse)
         let onTile = tile.insetBy(dx: -2, dy: -2).contains(mouse)
         let overDock = isOverDock(mouse)
         // Between the Dock and the popup, across the popup's width: on the way in or out.
         let approach = approachZone().contains(mouse)
+        let dragging = model.dragging != nil || heldForDrop || Date() < showLandedUntil
 
         // The Dock draws its name labels in its own window, just below the popup. On the Dock over
         // another app, drop below that window so the app's name shows on top of the popup; anywhere
-        // else (in the popup, a menu, or on the folder's own tile) stay above it, covering the
-        // folder's own label.
-        let level: NSWindow.Level = overDock && !onTile && !inMenu ? Self.belowDockLabels : .popUpMenu
+        // else (in the popup, a menu, or on the folder's own tile) stay above it.
+        let level: NSWindow.Level = overDock && !onTile && !inMenu
+            ? Self.belowDockLabels
+            : .popUpMenu
         if panel.level != level { panel.level = level }
 
         // The Dock shows the folder's name label while the pointer is on its tile, and keeps it
@@ -305,9 +426,8 @@ final class FolderPanelController: NSObject {
         let labelShowing = onTile || holdingDock
         if model.labelUnderneath != labelShowing { model.labelUnderneath = labelShowing }
 
-        let dragging = model.dragging != nil || heldForDrop || Date() < showLandedUntil
         if model.dragging != nil { checkEdgeDwell() }
-        updateMagnification(inside: inPopup && !menus && !dragging, mouse: mouse)
+        updateMagnification(inside: overPopupBody && !menus && !dragging, mouse: mouse)
 
         // An auto-hiding Dock stays up by itself while the pointer is on it (and keeps
         // magnifying normally). Above it, in or on the way to the popup, hold it up.
@@ -318,15 +438,6 @@ final class FolderPanelController: NSObject {
                 holdDock()
             }
         }
-
-        // Leaving through the sides or the top is like moving off the Dock: the folder goes at once.
-        // (Through the bottom, back toward the Dock, it lingers as before.)
-        if wasInPopup, !inPopup, !inMenu, !menus, !dragging, !inGracePeriod, !towardDock(mouse) {
-            wasInPopup = false
-            close()
-            return
-        }
-        wasInPopup = inPopup
 
         // Off the Dock and not headed into the popup, with nothing holding the Dock: it's sliding
         // away right now, so close with it instead of lingering above an empty screen edge.
@@ -341,7 +452,10 @@ final class FolderPanelController: NSObject {
         if inPopup || onTile || approach || inMenu || menus || dragging || !pointerEngaged {
             awaySince = nil
         } else if let since = awaySince {
-            if Date().timeIntervalSince(since) > (openedByHover ? 0.3 : 0.8), !inGracePeriod { close(); return }
+            let grace = openedByHover
+                ? FolderPopupMotion.hoverExitGrace
+                : FolderPopupMotion.exitGrace
+            if Date().timeIntervalSince(since) > grace, !inGracePeriod { close(); return }
         } else {
             awaySince = Date()
         }
@@ -392,26 +506,21 @@ final class FolderPanelController: NSObject {
     /// Just under the Dock's window (which holds its icons and name labels).
     private static let belowDockLabels = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
 
-    /// Whether a point just outside the popup is on its Dock side.
-    private func towardDock(_ point: CGPoint) -> Bool {
-        switch CoreDock.orientation {
-        case .bottom: return point.y < popupFrame.minY
-        case .left: return point.x < popupFrame.minX
-        case .right: return point.x > popupFrame.maxX
-        }
-    }
-
     private func approachZone() -> CGRect {
+        let horizontal = FolderPopupMotion.approachHorizontalPadding
         switch CoreDock.orientation {
         case .bottom:
-            return CGRect(x: popupFrame.minX - 16, y: barFrame.maxY - 2,
-                          width: popupFrame.width + 32, height: max(0, popupFrame.minY - barFrame.maxY) + 6)
+            return CGRect(x: popupFrame.minX - horizontal, y: barFrame.maxY - 2,
+                          width: popupFrame.width + horizontal * 2,
+                          height: max(0, popupFrame.minY - barFrame.maxY) + 6)
         case .left:
-            return CGRect(x: barFrame.maxX - 2, y: popupFrame.minY - 16,
-                          width: max(0, popupFrame.minX - barFrame.maxX) + 6, height: popupFrame.height + 32)
+            return CGRect(x: barFrame.maxX - 2, y: popupFrame.minY - horizontal,
+                          width: max(0, popupFrame.minX - barFrame.maxX) + 6,
+                          height: popupFrame.height + horizontal * 2)
         case .right:
-            return CGRect(x: popupFrame.maxX - 4, y: popupFrame.minY - 16,
-                          width: max(0, barFrame.minX - popupFrame.maxX) + 6, height: popupFrame.height + 32)
+            return CGRect(x: popupFrame.maxX - 4, y: popupFrame.minY - horizontal,
+                          width: max(0, barFrame.minX - popupFrame.maxX) + 6,
+                          height: popupFrame.height + horizontal * 2)
         }
     }
 
@@ -632,7 +741,10 @@ final class FolderPanelController: NSObject {
 
     /// Whether a point (Cocoa screen coordinates) is on the open popup.
     func popupContains(_ point: CGPoint) -> Bool {
-        isOpen && popupFrame.insetBy(dx: -6, dy: -6).contains(point)
+        isOpen && popupFrame.insetBy(
+            dx: -FolderPopupMotion.popupHitPadding,
+            dy: -FolderPopupMotion.popupHitPadding
+        ).contains(point)
     }
 
     func setDropTargeted(_ targeted: Bool) {
@@ -775,11 +887,12 @@ final class FolderPanelController: NSObject {
     /// Puts the popup's pointer exactly where the Dock would put this tile's name label:
     /// just above the tile, riding up and down with magnification.
     private func position() {
-        guard tileFrame.width > 0 else { return }
+        let anchor = frozenTileFrame ?? liveTileFrame
+        guard anchor.width > 0, anchor.height > 0 else { return }
         let m = model.metrics
         let bodyW = m.bodyWidth, bodyH = m.bodyHeight
         let arrow = FolderMetrics.arrowHeight
-        let tile = cocoa(tileFrame)
+        let tile = cocoa(anchor)
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: tile.midX, y: tile.midY)) }
             ?? NSScreen.main ?? NSScreen.screens[0]
         let bounds = screen.frame.insetBy(dx: 8, dy: 8)
@@ -828,6 +941,10 @@ final class FolderPanelController: NSObject {
 
     private func setArrowPosition(_ value: CGFloat) {
         if abs(model.arrowPosition - value) > 0.25 { model.arrowPosition = value }
+    }
+
+    private func dockProcessIdentifier() -> pid_t? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
     }
 
     // MARK: Watching for reasons to close
