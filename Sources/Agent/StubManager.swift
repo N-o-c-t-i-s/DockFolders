@@ -63,6 +63,7 @@ enum StubManager {
             dark: isDarkMode,
             displayMode: FolderPrefs.dockIconDisplayMode,
             preferredColumns: FolderPrefs.folderGridColumns,
+            preferredRows: FolderPrefs.folderGridRows,
             to: contents.appendingPathComponent("Resources/AppIcon.icns")
         )
 
@@ -120,7 +121,8 @@ enum StubManager {
             pixelSize: 1024,
             dark: isDarkMode,
             displayMode: FolderPrefs.dockIconDisplayMode,
-            preferredColumns: FolderPrefs.folderGridColumns
+            preferredColumns: FolderPrefs.folderGridColumns,
+            preferredRows: FolderPrefs.folderGridRows
         ) {
             try? png.write(to: DFShared.tileImageURL(for: folder.tileKey), options: .atomic)
         }

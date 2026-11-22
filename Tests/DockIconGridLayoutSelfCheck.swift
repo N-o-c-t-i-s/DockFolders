@@ -18,6 +18,7 @@ private func expectedRows(for slotCount: Int, columns: Int) -> Int {
 private func verify(
     count: Int,
     preferredColumns: Int,
+    preferredRows: Int,
     mode: DockIconDisplayMode,
     expectedColumns: Int,
     expectedDisplayedApps: Int,
@@ -27,17 +28,22 @@ private func verify(
     let layout = DockIconGridLayout.make(
         appCount: count,
         preferredColumns: preferredColumns,
+        preferredRows: preferredRows,
         displayMode: mode,
         in: body
     )
-    let context = "count=\(count) mode=\(mode.rawValue) preferredColumns=\(preferredColumns)"
+    let context = "count=\(count) mode=\(mode.rawValue) preferredColumns=\(preferredColumns) preferredRows=\(preferredRows)"
 
     check(layout.columns == expectedColumns, "\(context): columns")
     check(layout.displayedAppCount == expectedDisplayedApps, "\(context): displayed apps")
     check(layout.slots.count == expectedSlotCount, "\(context): slot count")
     check(layout.overflowCount == expectedOverflow, "\(context): overflow count")
+    let reservedRows = mode == .preview ? 2 : preferredRows
+    let expectedRowCount = expectedSlotCount == 0
+        ? 0
+        : max(reservedRows, expectedRows(for: expectedSlotCount, columns: expectedColumns))
     check(
-        layout.rows == expectedRows(for: expectedSlotCount, columns: expectedColumns),
+        layout.rows == expectedRowCount,
         "\(context): rows"
     )
 
@@ -98,15 +104,47 @@ private func verify(
     }
 }
 
+private func verifyTwoAppsReservePageRows(columns: Int, rows: Int) {
+    let layout = DockIconGridLayout.make(
+        appCount: 2,
+        preferredColumns: columns,
+        preferredRows: rows,
+        displayMode: .cappedGrid,
+        in: body
+    )
+    let context = "two apps mode=cappedGrid grid=\(columns)x\(rows)"
+
+    check(layout.columns == columns, "\(context): columns")
+    check(layout.rows == rows, "\(context): reserved rows")
+    check(layout.slots.count == 2, "\(context): slot count")
+    check(abs(layout.gridRect.midX - body.midX) < epsilon, "\(context): grid is horizontally centered")
+    check(abs(layout.gridRect.midY - body.midY) < epsilon, "\(context): grid is vertically centered")
+
+    let first = layout.slots[0]
+    let second = layout.slots[1]
+    let gap = (layout.gridRect.width - CGFloat(columns) * first.width) / CGFloat(columns - 1)
+    check(abs(first.minX - layout.gridRect.minX) < epsilon, "\(context): first app is in the top-left cell")
+    check(abs(first.maxY - layout.gridRect.maxY) < epsilon, "\(context): first app is in the top row")
+    check(
+        abs(second.minX - (first.maxX + gap)) < epsilon,
+        "\(context): second app is in the second top-left cell"
+    )
+    check(abs(second.maxY - layout.gridRect.maxY) < epsilon, "\(context): second app is in the top row")
+
+    let expectedHeight = CGFloat(rows) * first.height + CGFloat(rows - 1) * gap
+    check(abs(layout.gridRect.height - expectedHeight) < epsilon, "\(context): grid height includes every reserved row")
+}
+
 @main
 private enum DockIconGridLayoutSelfCheck {
     static func main() {
-        for preferredColumns in [3, 4] {
+        for (preferredColumns, preferredRows) in [(3, 3), (4, 4)] {
             for count in counts {
                 let previewApps = min(count, 4)
                 verify(
                     count: count,
                     preferredColumns: preferredColumns,
+                    preferredRows: preferredRows,
                     mode: .preview,
                     expectedColumns: 2,
                     expectedDisplayedApps: previewApps,
@@ -126,6 +164,7 @@ private enum DockIconGridLayoutSelfCheck {
                 verify(
                     count: count,
                     preferredColumns: preferredColumns,
+                    preferredRows: preferredRows,
                     mode: .cappedGrid,
                     expectedColumns: preferredColumns,
                     expectedDisplayedApps: cappedApps,
@@ -136,6 +175,7 @@ private enum DockIconGridLayoutSelfCheck {
                 verify(
                     count: count,
                     preferredColumns: preferredColumns,
+                    preferredRows: preferredRows,
                     mode: .all,
                     expectedColumns: preferredColumns,
                     expectedDisplayedApps: count,
@@ -145,6 +185,9 @@ private enum DockIconGridLayoutSelfCheck {
             }
         }
 
-        print("Dock icon grid layout self-check passed for \(counts.count * 2 * 3) cases.")
+        verifyTwoAppsReservePageRows(columns: 3, rows: 3)
+        verifyTwoAppsReservePageRows(columns: 4, rows: 4)
+
+        print("Dock icon grid layout self-check passed for \(counts.count * 2 * 3 + 2) cases.")
     }
 }

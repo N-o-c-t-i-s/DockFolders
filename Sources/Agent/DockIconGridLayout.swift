@@ -34,11 +34,13 @@ struct DockIconGridLayout: Equatable {
     static func make(
         appCount: Int,
         preferredColumns: Int,
+        preferredRows: Int,
         displayMode: DockIconDisplayMode,
         in body: CGRect
     ) -> DockIconGridLayout {
         let count = max(0, appCount)
         let columns = displayMode == .preview ? 2 : max(1, preferredColumns)
+        let reservedRows = displayMode == .preview ? 2 : max(1, preferredRows)
 
         let visibleSlotCount: Int
         let displayedAppCount: Int
@@ -64,7 +66,7 @@ struct DockIconGridLayout: Equatable {
 
         let rows = visibleSlotCount == 0
             ? 0
-            : (visibleSlotCount + columns - 1) / columns
+            : max(reservedRows, (visibleSlotCount + columns - 1) / columns)
         guard rows > 0, body.width > 0, body.height > 0 else {
             return DockIconGridLayout(
                 columns: columns,

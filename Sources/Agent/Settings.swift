@@ -104,12 +104,14 @@ final class SettingsModel: ObservableObject {
 
     func tileImage(_ folder: Folder, size: Int = 128) -> NSImage {
         let image = NSImage(size: NSSize(width: size / 2, height: size / 2))
+        let grid = FolderMetrics.grid(forPageSize: appsPerPage)
         if let rep = TileRenderer.render(
             apps: folder.appURLs,
             pixelSize: size,
             dark: StubManager.isDarkMode,
             displayMode: dockIconDisplayMode,
-            preferredColumns: FolderMetrics.grid(forPageSize: appsPerPage).columns
+            preferredColumns: grid.columns,
+            preferredRows: grid.rows
         ) {
             image.addRepresentation(rep)
         }

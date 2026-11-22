@@ -39,6 +39,11 @@ enum FolderPrefs {
         FolderMetrics.grid(forPageSize: appsPerPage).columns
     }
 
+    /// The open folder's row count, also used by its closed Dock icon.
+    static var folderGridRows: Int {
+        FolderMetrics.grid(forPageSize: appsPerPage).rows
+    }
+
     /// Icon size inside folders, in points. Unset: the same size as the Dock's icons.
     static var customIconSize: CGFloat? {
         get { (defaults.object(forKey: "iconSize") as? NSNumber).map { CGFloat($0.doubleValue) } }

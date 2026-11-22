@@ -14,7 +14,8 @@ enum TileRenderer {
         pixelSize: Int = 512,
         dark: Bool,
         displayMode: DockIconDisplayMode,
-        preferredColumns: Int
+        preferredColumns: Int,
+        preferredRows: Int
     ) -> NSBitmapImageRep? {
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: pixelSize, pixelsHigh: pixelSize,
@@ -64,6 +65,7 @@ enum TileRenderer {
         let layout = DockIconGridLayout.make(
             appCount: apps.count,
             preferredColumns: preferredColumns,
+            preferredRows: preferredRows,
             displayMode: displayMode,
             in: body
         )
@@ -122,14 +124,16 @@ enum TileRenderer {
         pixelSize: Int = 512,
         dark: Bool,
         displayMode: DockIconDisplayMode,
-        preferredColumns: Int
+        preferredColumns: Int,
+        preferredRows: Int
     ) -> Data? {
         render(
             apps: apps,
             pixelSize: pixelSize,
             dark: dark,
             displayMode: displayMode,
-            preferredColumns: preferredColumns
+            preferredColumns: preferredColumns,
+            preferredRows: preferredRows
         )?.representation(using: .png, properties: [:])
     }
 
@@ -249,6 +253,7 @@ enum TileRenderer {
         dark: Bool,
         displayMode: DockIconDisplayMode,
         preferredColumns: Int,
+        preferredRows: Int,
         to url: URL
     ) {
         let sizes = [16, 32, 128, 256, 512]
@@ -264,7 +269,8 @@ enum TileRenderer {
                 pixelSize: size,
                 dark: dark,
                 displayMode: displayMode,
-                preferredColumns: preferredColumns
+                preferredColumns: preferredColumns,
+                preferredRows: preferredRows
             )?.cgImage {
                 CGImageDestinationAddImage(destination, image, nil)
             }
