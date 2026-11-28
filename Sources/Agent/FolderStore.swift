@@ -15,6 +15,10 @@ struct Folder: Codable, Identifiable, Equatable {
     var slot: Int? = nil
 
     var appURLs: [URL] { apps.map { URL(fileURLWithPath: $0) } }
+    /// App paths that still exist, in display order.
+    var availableAppURLs: [URL] {
+        appURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
     var stubURL: URL { DFShared.stubsDirectory.appendingPathComponent(stubName, isDirectory: true) }
     var bundleIdentifier: String { DFShared.stubBundleIDPrefix + (slot.map { "slot\($0)" } ?? id) }
     /// Names the folder's tile image; stable per slot, as the Dock may keep a slot's plug-in loaded.

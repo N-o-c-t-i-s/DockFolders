@@ -1012,11 +1012,10 @@ final class FolderPanelController: NSObject {
 
     static func apps(in folder: Folder) -> [FolderApp] {
         let running = runningAppPaths()
-        return folder.appURLs.compactMap { url in
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return FolderApp(url: url, name: displayName(of: url),
-                             icon: AppIconResolver.icon(for: url),
-                             isRunning: running.contains(url.standardizedFileURL.path))
+        return folder.availableAppURLs.map { url in
+            FolderApp(url: url, name: displayName(of: url),
+                      icon: AppIconResolver.icon(for: url),
+                      isRunning: running.contains(url.standardizedFileURL.path))
         }
     }
 

@@ -97,8 +97,9 @@ final class SettingsModel: ObservableObject {
 
     /// A representative folder for the General page's live Dock-icon preview.
     var dockIconPreviewFolder: Folder? {
-        if let selectedFolder, !selectedFolder.apps.isEmpty { return selectedFolder }
-        return folders.filter { !$0.apps.isEmpty }.max { $0.apps.count < $1.apps.count }
+        if let selectedFolder, !selectedFolder.availableAppURLs.isEmpty { return selectedFolder }
+        return folders.filter { !$0.availableAppURLs.isEmpty }
+            .max { $0.availableAppURLs.count < $1.availableAppURLs.count }
             ?? folders.first
     }
 
@@ -106,7 +107,7 @@ final class SettingsModel: ObservableObject {
         let image = NSImage(size: NSSize(width: size / 2, height: size / 2))
         let grid = FolderMetrics.grid(forPageSize: appsPerPage)
         if let rep = TileRenderer.render(
-            apps: folder.appURLs,
+            apps: folder.availableAppURLs,
             pixelSize: size,
             dark: StubManager.isDarkMode,
             displayMode: dockIconDisplayMode,
@@ -312,7 +313,7 @@ private struct FolderDetailView: View {
         // Filled in up front (not on appear), so the page never shows an empty name or list.
         let folder = model.folder(folderID)
         _name = State(initialValue: folder?.name ?? "")
-        _order = State(initialValue: folder?.appURLs ?? [])
+        _order = State(initialValue: folder?.availableAppURLs ?? [])
     }
 
     var body: some View {
@@ -368,11 +369,11 @@ private struct FolderDetailView: View {
                         set: { model.setInDock(folderID, $0) }
                     )) {
                         Text("Show in Dock")
-                        if folder.apps.isEmpty {
+                        if folder.availableAppURLs.isEmpty {
                             Text("Add an app first. Empty folders stay out of the Dock.")
                         }
                     }
-                    .disabled(folder.apps.isEmpty)
+                    .disabled(folder.availableAppURLs.isEmpty)
                     .accessibilityLabel("Show in Dock")
                 }
 
@@ -404,7 +405,7 @@ private struct FolderDetailView: View {
             .onAppear {
                 DispatchQueue.main.async { takeNameRequest() }
             }
-            .onChange(of: folder.apps) { _, apps in order = apps.map { URL(fileURLWithPath: $0) } }
+            .onChange(of: folder.apps) { _, _ in order = folder.availableAppURLs }
             .onChange(of: editingName) { _, editing in if !editing { save() } }
             .onChange(of: model.editNameOf) { _, id in if id == folderID { takeNameRequest() } }
             .onDisappear { save() }
@@ -428,9 +429,9 @@ private struct FolderDetailView: View {
         switch model.dockIconDisplayMode {
         case .preview:
             return "Drag to reorder. The first four show on the folder’s Dock icon."
-        case .cappedGrid where folder.apps.count > DockIconGridLayout.cappedSlotCount:
+        case .cappedGrid where folder.availableAppURLs.count > DockIconGridLayout.cappedSlotCount:
             let visible = DockIconGridLayout.cappedAppCount
-            let overflow = folder.apps.count - visible
+            let overflow = folder.availableAppURLs.count - visible
             return "Drag to reorder. The first \(visible) show, followed by a +\(overflow) badge on the folder’s Dock icon."
         case .cappedGrid:
             return "Drag to reorder. All apps show on the folder’s Dock icon."

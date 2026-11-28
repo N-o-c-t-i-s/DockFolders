@@ -38,7 +38,11 @@ private func verify(
     check(layout.displayedAppCount == expectedDisplayedApps, "\(context): displayed apps")
     check(layout.slots.count == expectedSlotCount, "\(context): slot count")
     check(layout.overflowCount == expectedOverflow, "\(context): overflow count")
-    let reservedRows = mode == .preview ? 2 : preferredRows
+    let usesSquareOverflowBucket = mode == .cappedGrid
+        && (expectedSlotCount > preferredColumns * preferredRows || expectedOverflow > 0)
+    let reservedRows = usesSquareOverflowBucket
+        ? expectedColumns
+        : (mode == .preview ? 2 : preferredRows)
     let expectedRowCount = expectedSlotCount == 0
         ? 0
         : max(reservedRows, expectedRows(for: expectedSlotCount, columns: expectedColumns))
@@ -135,6 +139,44 @@ private func verifyTwoAppsReservePageRows(columns: Int, rows: Int) {
     check(abs(layout.gridRect.height - expectedHeight) < epsilon, "\(context): grid height includes every reserved row")
 }
 
+private func verifySquareOverflowBucket(
+    appCount: Int,
+    preferredColumns: Int,
+    preferredRows: Int,
+    expectedColumns: Int,
+    expectedRows: Int,
+    expectedSlots: Int,
+    expectedDisplayedApps: Int,
+    expectedOverflow: Int
+) {
+    let layout = DockIconGridLayout.make(
+        appCount: appCount,
+        preferredColumns: preferredColumns,
+        preferredRows: preferredRows,
+        displayMode: .cappedGrid,
+        in: body
+    )
+    let context = "square bucket count=\(appCount) preferred=\(preferredColumns)x\(preferredRows)"
+
+    check(layout.columns == expectedColumns, "\(context): columns")
+    check(layout.rows == expectedRows, "\(context): rows")
+    check(layout.slots.count == expectedSlots, "\(context): slot count")
+    check(layout.displayedAppCount == expectedDisplayedApps, "\(context): displayed apps")
+    check(layout.overflowCount == expectedOverflow, "\(context): overflow count")
+    check(abs(layout.gridRect.width - layout.gridRect.height) < epsilon, "\(context): square grid rect")
+
+    for slot in layout.slots {
+        check(abs(slot.width - slot.height) < epsilon, "\(context): square slot")
+    }
+
+    let first = layout.slots[0]
+    let horizontalGap = (layout.gridRect.width - CGFloat(expectedColumns) * first.width)
+        / CGFloat(expectedColumns - 1)
+    let verticalGap = (layout.gridRect.height - CGFloat(expectedRows) * first.height)
+        / CGFloat(expectedRows - 1)
+    check(abs(horizontalGap - verticalGap) < epsilon, "\(context): equal horizontal and vertical gaps")
+}
+
 @main
 private enum DockIconGridLayoutSelfCheck {
     static func main() {
@@ -161,12 +203,17 @@ private enum DockIconGridLayoutSelfCheck {
                 let cappedOverflow = count > DockIconGridLayout.cappedSlotCount
                     ? count - DockIconGridLayout.cappedAppCount
                     : 0
+                let usesSquareOverflowBucket =
+                    cappedSlots > preferredColumns * preferredRows || cappedOverflow > 0
+                let cappedColumns = usesSquareOverflowBucket
+                    ? DockIconGridLayout.cappedSquareBucketColumns(forVisibleSlotCount: cappedSlots)
+                    : preferredColumns
                 verify(
                     count: count,
                     preferredColumns: preferredColumns,
                     preferredRows: preferredRows,
                     mode: .cappedGrid,
-                    expectedColumns: preferredColumns,
+                    expectedColumns: cappedColumns,
                     expectedDisplayedApps: cappedApps,
                     expectedSlotCount: cappedSlots,
                     expectedOverflow: cappedOverflow
@@ -188,6 +235,88 @@ private enum DockIconGridLayoutSelfCheck {
         verifyTwoAppsReservePageRows(columns: 3, rows: 3)
         verifyTwoAppsReservePageRows(columns: 4, rows: 4)
 
-        print("Dock icon grid layout self-check passed for \(counts.count * 2 * 3 + 2) cases.")
+        verifySquareOverflowBucket(
+            appCount: 4,
+            preferredColumns: 3,
+            preferredRows: 1,
+            expectedColumns: 2,
+            expectedRows: 2,
+            expectedSlots: 4,
+            expectedDisplayedApps: 4,
+            expectedOverflow: 0
+        )
+        verifySquareOverflowBucket(
+            appCount: 5,
+            preferredColumns: 3,
+            preferredRows: 1,
+            expectedColumns: 3,
+            expectedRows: 3,
+            expectedSlots: 5,
+            expectedDisplayedApps: 5,
+            expectedOverflow: 0
+        )
+        verifySquareOverflowBucket(
+            appCount: 9,
+            preferredColumns: 3,
+            preferredRows: 1,
+            expectedColumns: 3,
+            expectedRows: 3,
+            expectedSlots: 9,
+            expectedDisplayedApps: 9,
+            expectedOverflow: 0
+        )
+        verifySquareOverflowBucket(
+            appCount: 10,
+            preferredColumns: 3,
+            preferredRows: 3,
+            expectedColumns: 4,
+            expectedRows: 4,
+            expectedSlots: 10,
+            expectedDisplayedApps: 10,
+            expectedOverflow: 0
+        )
+        verifySquareOverflowBucket(
+            appCount: 16,
+            preferredColumns: 3,
+            preferredRows: 3,
+            expectedColumns: 4,
+            expectedRows: 4,
+            expectedSlots: 16,
+            expectedDisplayedApps: 16,
+            expectedOverflow: 0
+        )
+        verifySquareOverflowBucket(
+            appCount: 16,
+            preferredColumns: 4,
+            preferredRows: 4,
+            expectedColumns: 4,
+            expectedRows: 4,
+            expectedSlots: 16,
+            expectedDisplayedApps: 16,
+            expectedOverflow: 0
+        )
+        verifySquareOverflowBucket(
+            appCount: 17,
+            preferredColumns: 3,
+            preferredRows: 3,
+            expectedColumns: 4,
+            expectedRows: 4,
+            expectedSlots: 16,
+            expectedDisplayedApps: 15,
+            expectedOverflow: 2
+        )
+
+        let preservedPage = DockIconGridLayout.make(
+            appCount: 2,
+            preferredColumns: 3,
+            preferredRows: 3,
+            displayMode: .cappedGrid,
+            in: body
+        )
+        check(preservedPage.columns == 3, "two apps: preserved page columns")
+        check(preservedPage.rows == 3, "two apps: preserved page rows")
+        check(preservedPage.slots.count == 2, "two apps: only two occupied slots")
+
+        print("Dock icon grid layout self-check passed for \(counts.count * 2 * 3 + 11) cases.")
     }
 }

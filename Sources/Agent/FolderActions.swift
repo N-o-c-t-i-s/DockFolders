@@ -174,7 +174,7 @@ enum FolderActions {
         guard let folder = store.folder(id: folderID) else { return }
         FolderPanelController.shared.close(ifShowing: folderID)
         let tileURL = dockURL(for: folder)
-        let apps = folder.appURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        let apps = folder.availableAppURLs
         StubManager.busy.insert(folder.id)
         let oldStub = pendingRenames.removeValue(forKey: folderID)
         var stubURLs = [folder.stubURL]
@@ -331,6 +331,34 @@ enum FolderActions {
             hideFromDock(folder) { next(rest.dropFirst()) }
         }
         next(empty[...])
+    }
+
+    /// Removes stored app paths that no longer exist and refreshes every affected folder.
+    @discardableResult
+    static func removeMissingApps() -> Bool {
+        precondition(Thread.isMainThread, "removeMissingApps must run on the main thread")
+
+        var changed = false
+        var affectedFolders: [Folder] = []
+        for folder in store.folders {
+            let missingPaths = Set(folder.apps.filter {
+                !FileManager.default.fileExists(atPath: $0)
+            })
+            guard !missingPaths.isEmpty,
+                  let updated = store.update(folder.id, {
+                      $0.apps.removeAll { missingPaths.contains($0) }
+                  }) else { continue }
+            changed = true
+            affectedFolders.append(updated)
+        }
+
+        if changed {
+            affectedFolders.forEach(StubManager.refreshTile)
+            StubManager.refreshAllTiles()
+            FolderPanelController.shared.reload()
+        }
+        removeEmptyFoldersFromDock()
+        return changed
     }
 
     // MARK: Folder-level

@@ -59,7 +59,7 @@ enum StubManager {
         try data.write(to: binary)
 
         TileRenderer.writeICNS(
-            apps: folder.appURLs,
+            apps: folder.availableAppURLs,
             dark: isDarkMode,
             displayMode: FolderPrefs.dockIconDisplayMode,
             preferredColumns: FolderPrefs.folderGridColumns,
@@ -117,7 +117,7 @@ enum StubManager {
     static func refreshTile(_ folder: Folder) {
         try? FileManager.default.createDirectory(at: DFShared.tilesDirectory, withIntermediateDirectories: true)
         if let png = TileRenderer.pngData(
-            apps: folder.appURLs,
+            apps: folder.availableAppURLs,
             pixelSize: 1024,
             dark: isDarkMode,
             displayMode: FolderPrefs.dockIconDisplayMode,
@@ -158,7 +158,7 @@ enum StubManager {
 
     /// Whether any app in the folder is running.
     static func hasRunningApp(_ folder: Folder, running: Set<String> = FolderPanelController.runningAppPaths()) -> Bool {
-        folder.appURLs.contains { running.contains($0.standardizedFileURL.path) }
+        folder.availableAppURLs.contains { running.contains($0.standardizedFileURL.path) }
     }
 
     /// The Dock only draws its running dot for running apps, so while any app in the folder is

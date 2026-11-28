@@ -39,8 +39,8 @@ struct DockIconGridLayout: Equatable {
         in body: CGRect
     ) -> DockIconGridLayout {
         let count = max(0, appCount)
-        let columns = displayMode == .preview ? 2 : max(1, preferredColumns)
-        let reservedRows = displayMode == .preview ? 2 : max(1, preferredRows)
+        let preferredColumnCount = max(1, preferredColumns)
+        let preferredRowCount = max(1, preferredRows)
 
         let visibleSlotCount: Int
         let displayedAppCount: Int
@@ -64,6 +64,15 @@ struct DockIconGridLayout: Equatable {
             overflowCount = 0
         }
 
+        let configuredSlotCount = preferredColumnCount * preferredRowCount
+        let usesSquareOverflowBucket = displayMode == .cappedGrid
+            && (visibleSlotCount > configuredSlotCount || overflowCount > 0)
+        let columns = usesSquareOverflowBucket
+            ? Self.cappedSquareBucketColumns(forVisibleSlotCount: visibleSlotCount)
+            : (displayMode == .preview ? 2 : preferredColumnCount)
+        let reservedRows = usesSquareOverflowBucket
+            ? columns
+            : (displayMode == .preview ? 2 : preferredRowCount)
         let rows = visibleSlotCount == 0
             ? 0
             : max(reservedRows, (visibleSlotCount + columns - 1) / columns)
@@ -144,5 +153,11 @@ struct DockIconGridLayout: Equatable {
             slots: slots,
             gridRect: gridRect
         )
+    }
+
+    /// A square column count for grids that grow beyond their configured page.
+    static func cappedSquareBucketColumns(forVisibleSlotCount slotCount: Int) -> Int {
+        let count = max(1, slotCount)
+        return min(4, Int(ceil(sqrt(Double(count)))))
     }
 }

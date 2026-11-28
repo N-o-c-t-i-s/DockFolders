@@ -104,7 +104,7 @@ final class DockDragCollector {
                 // Show where it will land (sliding to that page if the others are full): the app,
                 // or every app of a folder being dragged in.
                 if let source = self.draggedFolderID.flatMap(FolderStore.shared.folder(id:)) {
-                    panel.previewDrop(of: source.appURLs)
+                    panel.previewDrop(of: source.availableAppURLs)
                 } else {
                     panel.previewDrop(of: self.dragged?.url)
                 }

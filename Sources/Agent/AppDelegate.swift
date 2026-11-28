@@ -3,6 +3,7 @@ import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = FolderStore.shared
+    private let appBundleMonitor = AppBundleMonitor()
     private var trustTimer: Timer?
     private var signalSources: [DispatchSourceSignal] = []
     private let welcomedKey = "DFWelcomed"
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installMainMenu()
         wireInterceptor()
         reconcileStubs()
+        appBundleMonitor.start()
         observeSystem()
         DockSettle.startObserving()
         // After any Dock restart from reconciling has settled.
@@ -32,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        appBundleMonitor.stop()
         FolderPanelController.shared.close(animated: false)
         // Nobody would keep the folders' running dots up to date.
         store.folders.forEach(StubManager.stopIndicator)
